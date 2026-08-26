@@ -1,0 +1,27 @@
+{
+  "name": "personal-assistant-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx watch src/index.ts",
+    "build": "npx tsc",
+    "start": "node dist/index.js",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^0.3.12",
+    "@langchain/core": "^0.3.40",
+    "@langchain/google-genai": "^0.1.8",
+    "@langchain/langgraph": "^0.2.45",
+    "@langchain/ollama": "^0.1.5",
+    "@langchain/openai": "^0.4.4",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.19",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
