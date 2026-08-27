@@ -325,11 +325,40 @@ function CustomBlockquote(props: React.ComponentPropsWithoutRef<"blockquote">) {
   );
 }
 
+function AssistantLoadingIndicator() {
+  return (
+    <div className="flex items-center gap-2.5 py-1 px-1 text-indigo-400 font-mono text-xs animate-pulse">
+      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+      <span className="text-zinc-400">Agent is processing response and tools...</span>
+    </div>
+  );
+}
+
 const MarkdownText: React.FC = () => {
   return (
     <MarkdownTextPrimitive
       components={{
         blockquote: CustomBlockquote,
+        table: ({ node, ...props }: any) => (
+          <div className="my-3 w-full overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/70 shadow-inner">
+            <table className="w-full text-left text-xs border-collapse font-sans min-w-[500px]" {...props} />
+          </div>
+        ),
+        thead: ({ node, ...props }: any) => (
+          <thead className="bg-zinc-800/90 border-b border-zinc-700/80 text-zinc-200 font-semibold uppercase tracking-wider text-[10px]" {...props} />
+        ),
+        tbody: ({ node, ...props }: any) => (
+          <tbody className="divide-y divide-zinc-800/60 text-zinc-300" {...props} />
+        ),
+        tr: ({ node, ...props }: any) => (
+          <tr className="hover:bg-zinc-800/40 transition-colors" {...props} />
+        ),
+        th: ({ node, ...props }: any) => (
+          <th className="px-3.5 py-2.5 text-zinc-300 font-medium text-[11px] border-r border-zinc-800 last:border-r-0" {...props} />
+        ),
+        td: ({ node, ...props }: any) => (
+          <td className="px-3.5 py-2.5 text-zinc-300 text-xs border-r border-zinc-800/50 last:border-r-0 whitespace-nowrap" {...props} />
+        ),
       }}
     />
   );
@@ -363,11 +392,16 @@ function CustomAssistantMessage() {
 
       <div className="flex-1 space-y-2 max-w-3xl min-w-0">
         <div className="bg-zinc-900/90 border border-zinc-800/90 rounded-2xl rounded-tl-none p-4 text-xs text-zinc-200 space-y-2 leading-relaxed shadow-sm">
-          <MessagePrimitive.Content
-            components={{
-              Text: MarkdownText,
-            }}
-          />
+          <MessagePrimitive.If hasContent={false}>
+            <AssistantLoadingIndicator />
+          </MessagePrimitive.If>
+          <MessagePrimitive.If hasContent={true}>
+            <MessagePrimitive.Content
+              components={{
+                Text: MarkdownText,
+              }}
+            />
+          </MessagePrimitive.If>
         </div>
 
         {/* Action bar and branch picker */}

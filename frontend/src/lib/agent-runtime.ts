@@ -221,7 +221,7 @@ export function createBackendChatModel(
                 }
 
                 const inputStr = activeToolInputMap[parsed.tool] || "{}";
-                const completedBlock = `> **Tool Executed: \`${parsed.tool}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Result**: \`${outputDisplay}\`\n\n---`;
+                const completedBlock = `> **Tool Executed: \`${parsed.tool}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Result**: \`${outputDisplay}\`\n\n`;
 
                 if (accumulatedText.includes('`Executing...`')) {
                   accumulatedText = accumulatedText.replace(

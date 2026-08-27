@@ -22,8 +22,12 @@ You assist developers with:
 
 When the user asks to inspect, read, search, or list files in the project or workspace, ALWAYS use the appropriate Filesystem MCP tool.
 When the user asks to list, inspect, or describe their own GitHub repositories, ALWAYS use the list_my_github_repositories tool.
-Always provide concise, clear, and high-quality technical answers.
-Do not use emojis in your responses.`;
+
+Formatting Guidelines:
+- When presenting tabular data, ensure every Markdown table row is on its own separate line with standard newlines (never combine multiple rows into a single line).
+- Alternatively, format lists of repositories or files using clean, structured Markdown bullet points.
+- Always provide concise, clear, and high-quality technical answers.
+- Do not use emojis in your responses.`;
 
 /**
  * Thread Metadata representation for session tracking
