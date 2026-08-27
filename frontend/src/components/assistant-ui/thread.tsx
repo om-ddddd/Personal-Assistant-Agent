@@ -28,6 +28,8 @@ import {
   Wrench,
   Calculator,
   Clock,
+  Calendar,
+  Mail,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -54,8 +56,7 @@ export function Thread({
                 Developer Personal Assistant
               </h2>
               <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
-                Autonomous coding agent with local LLM support, LangGraph execution,
-                and permission-gated MCP tools.
+                Autonomous coding assistant with Filesystem MCP, GitHub MCP, and Google Workspace integration.
               </p>
             </div>
 
@@ -79,53 +80,53 @@ export function Thread({
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="Read package.json from the project directory and explain its dependencies."
+                prompt="Tell me about all my personal GitHub repositories."
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300">
-                    Read File via MCP
+                    GitHub Repositories
                   </span>
-                  <Terminal className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
+                  <GitBranch className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Fetch and analyze file contents with read_text_file MCP tool.
+                  Fetch and inspect authenticated GitHub repositories and PRs.
                 </p>
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="Calculate (1548 * 372) / 12 and tell me the current time in Tokyo and London"
+                prompt="Check my upcoming Google Calendar events and list scheduled meetings."
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-300">
-                    Multi-Tool Math & Time
+                    Google Calendar
                   </span>
-                  <Calculator className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
+                  <Calendar className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Execute calculator and timezone lookup tools simultaneously.
+                  Retrieve upcoming meetings and schedule new calendar events.
                 </p>
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="Search for all typescript files matching '*.ts' in the project workspace using search_files tool."
+                prompt="List recent emails from my Gmail inbox and summarize unread messages."
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300">
-                    Search Files via MCP
+                    Gmail Inbox
                   </span>
-                  <Sparkles className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
+                  <Mail className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Glob search project files using search_files MCP tool.
+                  Search inbox messages, read details, and draft emails.
                 </p>
               </ThreadPrimitive.Suggestion>
             </div>
@@ -200,6 +201,10 @@ function ToolAccordion({
     ToolIcon = Calculator;
   } else if (toolName.toLowerCase().includes("time")) {
     ToolIcon = Clock;
+  } else if (toolName.toLowerCase().includes("calendar")) {
+    ToolIcon = Calendar;
+  } else if (toolName.toLowerCase().includes("email") || toolName.toLowerCase().includes("gmail")) {
+    ToolIcon = Mail;
   }
 
   // Format parameters JSON if valid

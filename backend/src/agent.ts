@@ -9,6 +9,7 @@ import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { model } from "./models.js";
 import { basicTools } from "./tools/basic.js";
+import { googleWorkspaceTools } from "./tools/google-workspace.js";
 import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
@@ -18,14 +19,18 @@ You assist developers with:
 1. Navigating and managing the workspace filesystem via Filesystem MCP tools (read_text_file, list_directory, search_files, write_file, edit_file, etc.).
 2. Mathematical calculations (calculator) and system time queries (get_time).
 3. GitHub repository operations and code reviews via GitHub MCP tools and list_my_github_repositories.
-4. Analyzing, refactoring, and debugging source code.
+4. Google Workspace management:
+   - Google Calendar: listing upcoming meetings (list_calendar_events), scheduling events (create_calendar_event), and deleting events (delete_calendar_event).
+   - Gmail: searching and listing inbox emails (list_emails), reading full message details (read_email), and sending emails (send_email).
+5. Analyzing, refactoring, and debugging source code.
 
 When the user asks to inspect, read, search, or list files in the project or workspace, ALWAYS use the appropriate Filesystem MCP tool.
 When the user asks to list, inspect, or describe their own GitHub repositories, ALWAYS use the list_my_github_repositories tool.
+When the user asks about calendar events, meetings, scheduling, or emails, ALWAYS use the appropriate Google Workspace tools (list_calendar_events, create_calendar_event, list_emails, read_email, send_email).
 
 Formatting Guidelines:
 - When presenting tabular data, ensure every Markdown table row is on its own separate line with standard newlines (never combine multiple rows into a single line).
-- Alternatively, format lists of repositories or files using clean, structured Markdown bullet points.
+- Alternatively, format lists of repositories, files, events, or emails using clean, structured Markdown bullet points.
 - Always provide concise, clear, and high-quality technical answers.
 - Do not use emojis in your responses.`;
 
@@ -127,7 +132,7 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
 export const checkpointer = new MemorySaver();
 
 let compiledAgentInstance: any = null;
-let activeToolsList: any[] = [...basicTools];
+let activeToolsList: any[] = [...basicTools, ...googleWorkspaceTools];
 
 function formatToolForModel(tool: any) {
   let parameters: any = { type: "object", properties: {} };
@@ -159,10 +164,10 @@ export async function getCompiledAgent() {
 
   // Load MCP tools from Filesystem MCP / GitHub MCP servers
   const mcpTools = await initializeMcpClient();
-  activeToolsList = [...basicTools, ...mcpTools];
+  activeToolsList = [...basicTools, ...googleWorkspaceTools, ...mcpTools];
 
   console.log(
-    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (${basicTools.length} basic + ${mcpTools.length} MCP)...`
+    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (${basicTools.length} basic + ${googleWorkspaceTools.length} Google Workspace + ${mcpTools.length} MCP)...`
   );
 
   const formattedTools = activeToolsList.map(formatToolForModel);
@@ -197,10 +202,12 @@ export async function getCompiledAgent() {
 }
 
 /**
- * Returns all active tools (basic + MCP)
+ * Returns all active tools (basic + Google Workspace + MCP)
  */
 export function getActiveTools() {
-  return activeToolsList.map((t) => ({
+  const mcpTools = getLoadedMcpTools();
+  const all = [...basicTools, ...googleWorkspaceTools, ...mcpTools];
+  return all.map((t) => ({
     name: t.name,
     description: t.description || "",
     schema: (t as any).schema ? Object.keys((t as any).schema.shape || {}) : [],

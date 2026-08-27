@@ -15,9 +15,10 @@ next-env.d.ts
 build/
 dist/
 
-# Environment variables
+# Environment variables & Tokens
 .env*.local
 .env
+.google-tokens.json
 
 # Debug logs
 npm-debug.log*
