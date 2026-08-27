@@ -6,7 +6,7 @@ import {
   END,
 } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
-import { SystemMessage, HumanMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
+import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { model } from "./models.js";
 import { basicTools } from "./tools/basic.js";
 import crypto from "crypto";
@@ -161,27 +161,6 @@ export const agent = workflow.compile({
 });
 
 /**
- * Save graph visualization as a PNG image file
- */
-export async function saveGraphImage(filename = "graph.png"): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const graph = await agent.getGraphAsync();
-  const blob = await graph.drawMermaidPng();
-  const buffer = Buffer.from(await blob.arrayBuffer());
-  await fs.writeFile(filename, buffer);
-  console.log(`Graph diagram saved to: ${filename}`);
-}
-
-/**
- * Print the Mermaid diagram markdown string to the console
- */
-export async function printMermaid(): Promise<void> {
-  const graph = await agent.getGraphAsync();
-  console.log("\nMermaid Diagram:\n");
-  console.log(graph.drawMermaid());
-}
-
-/**
  * Retrieve thread state history from LangGraph checkpointer
  */
 export async function getThreadHistory(threadId: string) {
@@ -197,23 +176,34 @@ export async function getThreadHistory(threadId: string) {
   }
 
   const rawMessages: BaseMessage[] = state.values.messages;
-  return rawMessages.map((m) => {
-    let role = "assistant";
-    if (m instanceof HumanMessage || m.getType() === "human") {
-      role = "user";
-    } else if (m instanceof SystemMessage || m.getType() === "system") {
-      role = "system";
-    } else if (m instanceof ToolMessage || m.getType() === "tool") {
-      role = "tool";
-    }
+  const history: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
 
-    const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-    return {
-      id: m.id || crypto.randomUUID(),
-      role,
-      content,
-    };
-  });
+  for (const m of rawMessages) {
+    const isHuman = m instanceof HumanMessage || (typeof m.getType === "function" && m.getType() === "human");
+    const isAI = m instanceof AIMessage || (typeof m.getType === "function" && m.getType() === "ai");
+
+    if (isHuman) {
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      if (text.trim()) {
+        history.push({
+          id: m.id || crypto.randomUUID(),
+          role: "user",
+          content: text,
+        });
+      }
+    } else if (isAI) {
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      if (text.trim()) {
+        history.push({
+          id: m.id || crypto.randomUUID(),
+          role: "assistant",
+          content: text,
+        });
+      }
+    }
+  }
+
+  return history;
 }
 
 /**
@@ -294,4 +284,13 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
       };
     }
   }
+}
+
+export async function saveGraphImage(filename = "graph.png"): Promise<void> {
+  const fs = await import("node:fs/promises");
+  const graph = await agent.getGraphAsync();
+  const blob = await graph.drawMermaidPng();
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  await fs.writeFile(filename, buffer);
+  console.log(`Graph diagram saved to: ${filename}`);
 }

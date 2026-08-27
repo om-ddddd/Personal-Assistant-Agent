@@ -1,6 +1,6 @@
 "use client";
 
-import { useLocalRuntime, type ChatModelAdapter } from "@assistant-ui/react";
+import { useLocalRuntime, type ChatModelAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
 export interface ThreadSession {
@@ -11,9 +11,16 @@ export interface ThreadSession {
   messageCount: number;
 }
 
+export interface ThreadHistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
 interface BackendRuntimeOptions {
   threadId: string;
   backendUrl?: string;
+  initialMessages?: readonly ThreadMessageLike[];
   onStreamComplete?: () => void;
 }
 
@@ -33,6 +40,27 @@ export async function fetchThreads(
     return data.threads || [];
   } catch (err) {
     console.error("Failed to fetch threads from backend:", err);
+    return [];
+  }
+}
+
+/**
+ * Fetch conversation history for a specific thread
+ */
+export async function fetchThreadHistory(
+  threadId: string,
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<ThreadHistoryMessage[]> {
+  try {
+    const res = await fetch(
+      `${backendUrl}/api/threads/${encodeURIComponent(threadId)}/history`,
+      { method: "GET" }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.messages || [];
+  } catch (err) {
+    console.error("Failed to fetch thread history from backend:", err);
     return [];
   }
 }
@@ -226,6 +254,7 @@ export function createBackendChatModel(
 export function useBackendRuntime({
   threadId,
   backendUrl = DEFAULT_BACKEND_URL,
+  initialMessages,
   onStreamComplete,
 }: BackendRuntimeOptions) {
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
@@ -254,7 +283,7 @@ export function useBackendRuntime({
     [threadId, backendUrl, onStreamComplete]
   );
 
-  const runtime = useLocalRuntime(adapter);
+  const runtime = useLocalRuntime(adapter, { initialMessages });
 
   return {
     runtime,

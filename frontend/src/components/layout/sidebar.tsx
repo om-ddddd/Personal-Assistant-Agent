@@ -22,6 +22,7 @@ interface SidebarProps {
   onDeleteSession: (id: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  isNewSessionDisabled?: boolean;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -51,6 +52,7 @@ export function Sidebar({
   onDeleteSession,
   isOpen,
   onToggleOpen,
+  isNewSessionDisabled,
 }: SidebarProps) {
   return (
     <aside
@@ -100,11 +102,15 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewSession}
+          disabled={isNewSessionDisabled}
           className={cn(
-            "w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-950 transition-all",
+            "w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all",
+            isNewSessionDisabled
+              ? "bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-70"
+              : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-950",
             !isOpen && "p-2"
           )}
-          title="Start New Session"
+          title={isNewSessionDisabled ? "You are already in a new conversation" : "Start New Session"}
         >
           <Plus className="w-4 h-4 shrink-0" />
           {isOpen && <span>New Session</span>}
