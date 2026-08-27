@@ -5,7 +5,7 @@ import {
   PanelLeft,
   FolderGit2,
   Trash2,
-  Server,
+  Shield,
 } from "lucide-react";
 import { ModelSelector, ModelOption } from "@/components/assistant-ui/model-selector";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,8 @@ interface HeaderProps {
   onModelSelect: (model: ModelOption) => void;
   onClearThread?: () => void;
   isBackendHealthy?: boolean | null;
+  onOpenPermissionManager?: () => void;
+  pendingConfirmationsCount?: number;
 }
 
 export function Header({
@@ -28,6 +30,8 @@ export function Header({
   onModelSelect,
   onClearThread,
   isBackendHealthy,
+  onOpenPermissionManager,
+  pendingConfirmationsCount = 0,
 }: HeaderProps) {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between gap-4 select-none shrink-0 z-20">
@@ -53,8 +57,31 @@ export function Header({
         </div>
       </div>
 
-      {/* Right side: Model Selector and actions */}
+      {/* Right side: Model Selector, Permission Gate button, and actions */}
       <div className="flex items-center gap-2.5 shrink-0">
+        {/* Permission Gate Manager Button */}
+        {onOpenPermissionManager && (
+          <button
+            type="button"
+            onClick={onOpenPermissionManager}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all hover:bg-zinc-900",
+              pendingConfirmationsCount > 0
+                ? "bg-amber-950/40 border-amber-700/80 text-amber-300 animate-pulse shadow-sm shadow-amber-950/50"
+                : "bg-zinc-900/90 border-zinc-800 text-zinc-300 hover:border-zinc-700"
+            )}
+            title="Open Tool Permission Manager and Security Guardrails"
+          >
+            <Shield className={cn("w-3.5 h-3.5", pendingConfirmationsCount > 0 ? "text-amber-400" : "text-indigo-400")} />
+            <span className="hidden sm:inline text-[11px]">Permissions</span>
+            {pendingConfirmationsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-amber-400 text-zinc-950">
+                {pendingConfirmationsCount}
+              </span>
+            )}
+          </button>
+        )}
+
         {/* Model Selector */}
         <ModelSelector
           selectedModelId={selectedModelId}

@@ -4,6 +4,8 @@ import {
   MemorySaver,
   START,
   END,
+  interrupt,
+  Command,
 } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
@@ -13,6 +15,16 @@ import { googleWorkspaceTools } from "./tools/google-workspace.js";
 import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
+
+// Permission system imports
+import { ToolRiskLevel, ConfirmationStatus } from "./permissions/types.js";
+import { checkPermission, registerTools } from "./permissions/registry.js";
+import {
+  createPendingConfirmation,
+  resolvePendingConfirmation,
+  getPendingConfirmation,
+  listPendingConfirmations,
+} from "./permissions/manager.js";
 
 const SYSTEM_PROMPT = `You are an expert Developer Personal Assistant Agent.
 You assist developers with:
@@ -155,7 +167,15 @@ function formatToolForModel(tool: any) {
 }
 
 /**
- * Builds or retrieves the compiled LangGraph agent with all basic and MCP tools attached
+ * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution.
+ *
+ * Graph topology:
+ *   START -> agent -> (toolsCondition) -> permissionGate -> tools -> agent
+ *                                      -> END
+ *
+ * The permissionGate node checks tool risk levels:
+ * - READ tools: pass through immediately to the tools node
+ * - WRITE/DESTRUCTIVE tools: call interrupt() to pause for HITL confirmation
  */
 export async function getCompiledAgent() {
   if (compiledAgentInstance) {
@@ -165,6 +185,13 @@ export async function getCompiledAgent() {
   // Load MCP tools from Filesystem MCP / GitHub MCP servers
   const mcpTools = await initializeMcpClient();
   activeToolsList = [...basicTools, ...googleWorkspaceTools, ...mcpTools];
+
+  // Register all tools in the permission registry (MCP tools default to WRITE if unknown)
+  registerTools(
+    activeToolsList.map((t) => ({ name: t.name, description: t.description })),
+    ToolRiskLevel.WRITE,
+    false
+  );
 
   console.log(
     `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (${basicTools.length} basic + ${googleWorkspaceTools.length} Google Workspace + ${mcpTools.length} MCP)...`
@@ -187,11 +214,179 @@ export async function getCompiledAgent() {
     return { messages: [response] };
   }
 
+  function isAIMessage(msg: any): boolean {
+    if (!msg) return false;
+    if (msg instanceof AIMessage) return true;
+    if (typeof msg.getType === "function" && msg.getType() === "ai") return true;
+    if (typeof msg._getType === "function" && msg._getType() === "ai") return true;
+    if (msg.constructor?.name?.startsWith("AIMessage")) return true;
+    return false;
+  }
+
+  function isToolMessage(msg: any): boolean {
+    if (!msg) return false;
+    if (msg instanceof ToolMessage) return true;
+    if (typeof msg.getType === "function" && msg.getType() === "tool") return true;
+    if (typeof msg._getType === "function" && msg._getType() === "tool") return true;
+    if (msg.constructor?.name?.startsWith("ToolMessage")) return true;
+    return false;
+  }
+
+  /**
+   * Permission Gate Node.
+   *
+   * Inspects the pending tool calls from the last AI message.
+   * If any tool requires confirmation (WRITE or DESTRUCTIVE),
+   * calls interrupt() to pause the graph and wait for human approval.
+   * READ tools pass through without interruption.
+   */
+  async function permissionGate(state: typeof MessagesAnnotation.State, config?: any) {
+    const lastMessage = state.messages[state.messages.length - 1];
+    const threadId = config?.configurable?.thread_id || "default-session";
+
+    // Only AI messages with tool_calls reach this node
+    if (!isAIMessage(lastMessage) || !(lastMessage as any).tool_calls?.length) {
+      return { messages: [] };
+    }
+
+    const toolCalls = (lastMessage as any).tool_calls;
+    const toolsNeedingConfirmation: Array<{
+      name: string;
+      args: Record<string, unknown>;
+      id: string;
+      riskLevel: ToolRiskLevel;
+    }> = [];
+
+    // Check each tool call's permission
+    for (const tc of toolCalls) {
+      const decision = checkPermission(tc.name);
+      if (decision.requiresConfirmation) {
+        toolsNeedingConfirmation.push({
+          name: tc.name,
+          args: tc.args as Record<string, unknown>,
+          id: tc.id || tc.name,
+          riskLevel: decision.riskLevel,
+        });
+      }
+    }
+
+    // If no tools need confirmation, pass through
+    if (toolsNeedingConfirmation.length === 0) {
+      console.log(
+        `[PermissionGate] All ${toolCalls.length} tool call(s) are READ-level, passing through.`
+      );
+      return { messages: [] };
+    }
+
+    // Store in pending confirmation manager
+    const createdConfirmations = toolsNeedingConfirmation.map((t) =>
+      createPendingConfirmation({
+        threadId,
+        toolName: t.name,
+        toolArgs: t.args,
+        riskLevel: t.riskLevel,
+        description: `Requires human approval for ${t.riskLevel} operation: ${t.name}`,
+      })
+    );
+
+    // Build the confirmation request payload
+    const confirmationPayload = {
+      type: "confirmation_required" as const,
+      tools: toolsNeedingConfirmation.map((t) => ({
+        name: t.name,
+        args: t.args,
+        callId: t.id,
+        riskLevel: t.riskLevel,
+      })),
+      message: toolsNeedingConfirmation.length === 1
+        ? `The tool "${toolsNeedingConfirmation[0].name}" (${toolsNeedingConfirmation[0].riskLevel}) requires your confirmation before execution.`
+        : `${toolsNeedingConfirmation.length} tools require your confirmation before execution.`,
+    };
+
+    console.log(
+      `[PermissionGate] Interrupting for HITL confirmation: ${toolsNeedingConfirmation.map((t) => `${t.name}(${t.riskLevel})`).join(", ")}`
+    );
+
+    // interrupt() pauses the graph and returns the human's response when resumed via Command
+    const humanDecision = interrupt(confirmationPayload);
+
+    // When resumed, humanDecision contains { approved: boolean }
+    const approved = humanDecision && typeof humanDecision === "object" && (humanDecision as any).approved === true;
+
+    // Resolve stored confirmations
+    for (const c of createdConfirmations) {
+      resolvePendingConfirmation(c.id, approved);
+    }
+
+    if (approved) {
+      console.log(`[PermissionGate] User APPROVED tool execution.`);
+      // Return empty messages to pass through to tools node
+      return { messages: [] };
+    } else {
+      console.log(`[PermissionGate] User REJECTED tool execution.`);
+      // Return ToolMessage rejections for each tool call so the agent knows the user declined
+      const rejectionMessages: ToolMessage[] = toolCalls.map((tc: any) =>
+        new ToolMessage({
+          tool_call_id: tc.id || tc.name,
+          content: JSON.stringify({
+            error: "REJECTED_BY_USER",
+            message: `The user rejected the execution of "${tc.name}". Do not retry this tool call. Acknowledge the rejection and ask if the user would like to do something else.`,
+          }),
+        })
+      );
+      return { messages: rejectionMessages };
+    }
+  }
+
+  /**
+   * Routing function after permissionGate.
+   *
+   * If permissionGate returned rejection ToolMessages, route back to agent.
+   * Otherwise, route to the tools node for execution.
+   */
+  function afterPermissionGate(state: typeof MessagesAnnotation.State): string {
+    const lastMessage = state.messages[state.messages.length - 1];
+
+    // If the last message is a ToolMessage with rejection, route to agent
+    if (isToolMessage(lastMessage)) {
+      try {
+        const content = JSON.parse(
+          typeof lastMessage.content === "string"
+            ? lastMessage.content
+            : JSON.stringify(lastMessage.content)
+        );
+        if (content.error === "REJECTED_BY_USER") {
+          return "agent";
+        }
+      } catch {
+        // Not a rejection message
+      }
+    }
+
+    // Otherwise proceed to tool execution
+    return "tools";
+  }
+
+  /**
+   * Custom routing after the agent node.
+   * Routes to permissionGate if tool calls are present, otherwise to END.
+   */
+  function routeAfterAgent(state: typeof MessagesAnnotation.State): string {
+    const lastMessage = state.messages[state.messages.length - 1];
+    const hasToolCalls = (lastMessage as any)?.tool_calls && (lastMessage as any).tool_calls.length > 0;
+    if (isAIMessage(lastMessage) && hasToolCalls) {
+      return "permissionGate";
+    }
+    return "__end__";
+  }
+
   const workflow = new StateGraph(MessagesAnnotation)
     .addNode("agent", callModel)
+    .addNode("permissionGate", permissionGate)
     .addNode("tools", toolNode)
     .addEdge(START, "agent")
-    .addConditionalEdges("agent", toolsCondition)
+    .addConditionalEdges("agent", routeAfterAgent)
+    .addConditionalEdges("permissionGate", afterPermissionGate)
     .addEdge("tools", "agent");
 
   compiledAgentInstance = workflow.compile({
@@ -415,7 +610,48 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
 }
 
 /**
- * Helper to stream raw token chunks and tool events from LangGraph using streamEvents
+ * Resume a paused graph after HITL confirmation.
+ * Sends a Command with the user's decision (approved/rejected) to resume the interrupted graph.
+ */
+export async function resumeAfterConfirmation(
+  threadId: string,
+  approved: boolean
+): Promise<{ content: string; interrupted: boolean; interruptPayload?: any }> {
+  const agentInstance = await getCompiledAgent();
+  const config = {
+    configurable: {
+      thread_id: threadId,
+    },
+  };
+
+  console.log(
+    `[Agent] Resuming thread "${threadId}" with decision: ${approved ? "APPROVED" : "REJECTED"}`
+  );
+
+  // Resolve pending confirmation in store
+  const pending = listPendingConfirmations(threadId);
+  for (const p of pending) {
+    if (p.status === ConfirmationStatus.PENDING) {
+      resolvePendingConfirmation(p.id, approved);
+    }
+  }
+
+  const result = await agentInstance.invoke(
+    new Command({ resume: { approved } }),
+    config
+  );
+
+  const lastMessage = result.messages[result.messages.length - 1];
+  const content = typeof lastMessage.content === "string"
+    ? lastMessage.content
+    : JSON.stringify(lastMessage.content);
+
+  return { content, interrupted: false };
+}
+
+/**
+ * Helper to stream raw token chunks, tool events, and HITL confirmation events
+ * from LangGraph using streamEvents.
  */
 export async function* streamAgentEvents(prompt: string, threadId: string = "default-thread") {
   const agentInstance = await getCompiledAgent();
@@ -500,4 +736,103 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
       };
     }
   }
+}
+
+/**
+ * Stream agent events when resuming after HITL confirmation.
+ * Uses Command to resume the interrupted graph and streams the result.
+ */
+export async function* streamResumeEvents(threadId: string, approved: boolean) {
+  const agentInstance = await getCompiledAgent();
+  const config = {
+    configurable: {
+      thread_id: threadId,
+    },
+  };
+
+  console.log(
+    `[Agent] Streaming resume for thread "${threadId}" with decision: ${approved ? "APPROVED" : "REJECTED"}`
+  );
+
+  // Resolve pending confirmation in store
+  const pending = listPendingConfirmations(threadId);
+  for (const p of pending) {
+    if (p.status === ConfirmationStatus.PENDING) {
+      resolvePendingConfirmation(p.id, approved);
+    }
+  }
+
+  const eventStream = agentInstance.streamEvents(
+    new Command({ resume: { approved } }),
+    {
+      ...config,
+      version: "v2",
+    }
+  );
+
+  for await (const event of eventStream) {
+    if (event.event === "on_chat_model_stream" && event.data?.chunk) {
+      const chunk = event.data.chunk;
+      let text = "";
+      if (typeof chunk.content === "string") {
+        text = chunk.content;
+      } else if (Array.isArray(chunk.content)) {
+        text = chunk.content.map((c: any) => (typeof c === "string" ? c : c.text || "")).join("");
+      }
+      if (text) {
+        yield { type: "text", text };
+      }
+    } else if (event.event === "on_tool_start") {
+      let rawInput = event.data?.input;
+      if (rawInput && typeof rawInput.input === "string") {
+        try {
+          rawInput = JSON.parse(rawInput.input);
+        } catch {
+          rawInput = rawInput.input;
+        }
+      }
+      yield {
+        type: "tool_start",
+        tool: event.name,
+        input: rawInput,
+      };
+    } else if (event.event === "on_tool_end") {
+      let rawOutput = event.data?.output;
+      if (rawOutput && typeof rawOutput === "object" && "content" in rawOutput) {
+        rawOutput = rawOutput.content;
+      }
+      const outputStr = typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput);
+      yield {
+        type: "tool_end",
+        tool: event.name,
+        output: outputStr,
+      };
+    }
+  }
+}
+
+/**
+ * Check if a thread is currently interrupted (waiting for HITL confirmation).
+ * Returns the interrupt payload if interrupted, or null otherwise.
+ */
+export async function getThreadInterruptState(threadId: string): Promise<any | null> {
+  const agentInstance = await getCompiledAgent();
+  const config = {
+    configurable: {
+      thread_id: threadId,
+    },
+  };
+
+  const state = await agentInstance.getState(config);
+  if (!state || !state.next || state.next.length === 0) return null;
+
+  // LangGraph stores interrupt info in state.tasks when paused
+  const tasks = state.tasks || [];
+  for (const task of tasks) {
+    if (task.interrupts && task.interrupts.length > 0) {
+      return task.interrupts.map((i: any) => i.value);
+    }
+  }
+
+  return null;
 }

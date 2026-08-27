@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, createContext, useContext } from "react";
 import {
   ThreadPrimitive,
   ComposerPrimitive,
@@ -21,9 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  Sparkles,
   Code2,
-  ShieldAlert,
   GitBranch,
   Wrench,
   Calculator,
@@ -31,152 +29,170 @@ import {
   Calendar,
   Mail,
   Loader2,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HITLConfirmationCard } from "./hitl-confirmation-card";
+import { ToolRiskLevel } from "@/lib/agent-runtime";
+
+interface ThreadContextType {
+  threadId: string;
+  onStreamComplete?: () => void;
+}
+
+const ThreadContext = createContext<ThreadContextType>({
+  threadId: "",
+});
 
 interface ThreadProps {
   activeModelName?: string;
+  threadId?: string;
+  onStreamComplete?: () => void;
 }
 
 export function Thread({
   activeModelName = "Groq (openai/gpt-oss-120b)",
+  threadId = "",
+  onStreamComplete,
 }: ThreadProps) {
   return (
-    <ThreadPrimitive.Root className="flex flex-col h-full bg-zinc-950/50 relative overflow-hidden">
-      {/* Messages Viewport */}
-      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 space-y-6 max-w-4xl mx-auto w-full">
-        {/* Empty State */}
-        <ThreadPrimitive.Empty>
-          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4 max-w-2xl mx-auto space-y-8">
-            <div className="space-y-3">
-              <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-indigo-950/60 border border-indigo-800/50 shadow-inner">
-                <Terminal className="w-8 h-8 text-indigo-400" />
+    <ThreadContext.Provider value={{ threadId, onStreamComplete }}>
+      <ThreadPrimitive.Root className="flex flex-col h-full bg-zinc-950/50 relative overflow-hidden">
+        {/* Messages Viewport */}
+        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 space-y-6 max-w-4xl mx-auto w-full">
+          {/* Empty State */}
+          <ThreadPrimitive.Empty>
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4 max-w-2xl mx-auto space-y-8">
+              <div className="space-y-3">
+                <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-indigo-950/60 border border-indigo-800/50 shadow-inner">
+                  <Terminal className="w-8 h-8 text-indigo-400" />
+                </div>
+                <h2 className="text-xl font-bold text-zinc-100 tracking-tight">
+                  Developer Personal Assistant
+                </h2>
+                <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+                  Autonomous coding assistant with Filesystem MCP, GitHub MCP, and Google Workspace integration. Protected by Human-in-the-Loop permission gates.
+                </p>
               </div>
-              <h2 className="text-xl font-bold text-zinc-100 tracking-tight">
-                Developer Personal Assistant
-              </h2>
-              <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
-                Autonomous coding assistant with Filesystem MCP, GitHub MCP, and Google Workspace integration.
-              </p>
+
+              {/* Prompt Starter Suggestions */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
+                <ThreadPrimitive.Suggestion
+                  prompt="List all files and folders in the workspace root directory using the list_directory tool."
+                  method="replace"
+                  autoSend
+                  className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-200 group-hover:text-cyan-300">
+                      Filesystem MCP (READ)
+                    </span>
+                    <Code2 className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    Inspect workspace structure safely with immediate execution.
+                  </p>
+                </ThreadPrimitive.Suggestion>
+
+                <ThreadPrimitive.Suggestion
+                  prompt="Tell me about all my personal GitHub repositories."
+                  method="replace"
+                  autoSend
+                  className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300">
+                      GitHub Repositories (READ)
+                    </span>
+                    <GitBranch className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    Fetch and inspect authenticated GitHub repositories and PRs.
+                  </p>
+                </ThreadPrimitive.Suggestion>
+
+                <ThreadPrimitive.Suggestion
+                  prompt="Schedule a calendar event called 'Team Sync' for tomorrow from 10am to 11am."
+                  method="replace"
+                  autoSend
+                  className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300">
+                      Create Calendar Event (WRITE)
+                    </span>
+                    <Calendar className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    Triggers Human-in-the-Loop permission gate before scheduling.
+                  </p>
+                </ThreadPrimitive.Suggestion>
+
+                <ThreadPrimitive.Suggestion
+                  prompt="Delete the calendar event with ID 'evt-001'."
+                  method="replace"
+                  autoSend
+                  className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-200 group-hover:text-rose-300">
+                      Delete Calendar Event (DESTRUCTIVE)
+                    </span>
+                    <Mail className="w-4 h-4 text-zinc-500 group-hover:text-rose-400" />
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    Requires explicit danger confirmation before deletion.
+                  </p>
+                </ThreadPrimitive.Suggestion>
+              </div>
             </div>
+          </ThreadPrimitive.Empty>
 
-            {/* Prompt Starter Suggestions */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
-              <ThreadPrimitive.Suggestion
-                prompt="List all files and folders in the workspace root directory using the list_directory tool."
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-cyan-300">
-                    Filesystem MCP Listing
-                  </span>
-                  <Code2 className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Inspect workspace structure using @modelcontextprotocol/server-filesystem.
-                </p>
-              </ThreadPrimitive.Suggestion>
-
-              <ThreadPrimitive.Suggestion
-                prompt="Tell me about all my personal GitHub repositories."
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300">
-                    GitHub Repositories
-                  </span>
-                  <GitBranch className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Fetch and inspect authenticated GitHub repositories and PRs.
-                </p>
-              </ThreadPrimitive.Suggestion>
-
-              <ThreadPrimitive.Suggestion
-                prompt="Check my upcoming Google Calendar events and list scheduled meetings."
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-300">
-                    Google Calendar
-                  </span>
-                  <Calendar className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Retrieve upcoming meetings and schedule new calendar events.
-                </p>
-              </ThreadPrimitive.Suggestion>
-
-              <ThreadPrimitive.Suggestion
-                prompt="List recent emails from my Gmail inbox and summarize unread messages."
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300">
-                    Gmail Inbox
-                  </span>
-                  <Mail className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Search inbox messages, read details, and draft emails.
-                </p>
-              </ThreadPrimitive.Suggestion>
-            </div>
-          </div>
-        </ThreadPrimitive.Empty>
-
-        {/* Message List */}
-        <ThreadPrimitive.Messages
-          components={{
-            UserMessage: CustomUserMessage,
-            AssistantMessage: CustomAssistantMessage,
-          }}
-        />
-
-        <ThreadPrimitive.ScrollToBottom className="absolute bottom-24 right-6 p-2 rounded-full bg-zinc-800/90 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 shadow-lg transition-all" />
-      </ThreadPrimitive.Viewport>
-
-      {/* Chat Composer Bar */}
-      <div className="p-4 border-t border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md max-w-4xl mx-auto w-full">
-        <ComposerPrimitive.Root className="relative flex flex-col rounded-xl bg-zinc-900/90 border border-zinc-800 shadow-xl focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
-          <ComposerPrimitive.Input
-            placeholder="Ask a question, run a calculation, or request timezone lookups..."
-            className="w-full px-4 py-3 bg-transparent text-xs text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 min-h-[52px] leading-relaxed font-sans"
-            rows={1}
-            autoFocus
+          {/* Message List */}
+          <ThreadPrimitive.Messages
+            components={{
+              UserMessage: CustomUserMessage,
+              AssistantMessage: CustomAssistantMessage,
+            }}
           />
 
-          <div className="px-3 pb-2.5 flex items-center justify-between gap-2 border-t border-zinc-800/40 pt-2">
-            <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
-              <span className="hidden sm:inline">Active Model:</span>
-              <span className="text-zinc-300 font-medium">{activeModelName}</span>
-              <span className="hidden md:inline text-zinc-600">|</span>
-              <span className="hidden md:inline text-zinc-500">
-                Shift + Enter for new line
-              </span>
-            </div>
+          <ThreadPrimitive.ScrollToBottom className="absolute bottom-24 right-6 p-2 rounded-full bg-zinc-800/90 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 shadow-lg transition-all" />
+        </ThreadPrimitive.Viewport>
 
-            <div className="flex items-center gap-2">
-              <ComposerPrimitive.Cancel className="p-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors">
-                <Square className="w-4 h-4 fill-current" />
-              </ComposerPrimitive.Cancel>
+        {/* Chat Composer Bar */}
+        <div className="p-4 border-t border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md max-w-4xl mx-auto w-full">
+          <ComposerPrimitive.Root className="relative flex flex-col rounded-xl bg-zinc-900/90 border border-zinc-800 shadow-xl focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
+            <ComposerPrimitive.Input
+              placeholder="Ask a question, schedule an event, or request file changes..."
+              className="w-full px-4 py-3 bg-transparent text-xs text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 min-h-[52px] leading-relaxed font-sans"
+              rows={1}
+              autoFocus
+            />
 
-              <ComposerPrimitive.Send className="p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-                <ArrowUp className="w-4 h-4" />
-              </ComposerPrimitive.Send>
+            <div className="px-3 pb-2.5 flex items-center justify-between gap-2 border-t border-zinc-800/40 pt-2">
+              <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
+                <span className="hidden sm:inline">Active Model:</span>
+                <span className="text-zinc-300 font-medium">{activeModelName}</span>
+                <span className="hidden md:inline text-zinc-600">|</span>
+                <span className="hidden md:inline text-zinc-500">
+                  Shift + Enter for new line
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <ComposerPrimitive.Cancel className="p-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors">
+                  <Square className="w-4 h-4 fill-current" />
+                </ComposerPrimitive.Cancel>
+
+                <ComposerPrimitive.Send className="p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                  <ArrowUp className="w-4 h-4" />
+                </ComposerPrimitive.Send>
+              </div>
             </div>
-          </div>
-        </ComposerPrimitive.Root>
-      </div>
-    </ThreadPrimitive.Root>
+          </ComposerPrimitive.Root>
+        </div>
+      </ThreadPrimitive.Root>
+    </ThreadContext.Provider>
   );
 }
 
@@ -297,11 +313,38 @@ function extractNodeText(node: React.ReactNode): string {
 }
 
 /**
- * Custom Blockquote that intercepts tool call markdown patterns and renders ToolAccordion
+ * Custom Blockquote that intercepts tool call markdown patterns and HITL confirmation patterns
  */
 function CustomBlockquote(props: React.ComponentPropsWithoutRef<"blockquote">) {
+  const { threadId, onStreamComplete } = useContext(ThreadContext);
   const textContent = extractNodeText(props.children);
 
+  // 1. Intercept HITL Confirmation Required pattern
+  if (textContent.includes("Confirmation Required:")) {
+    const toolMatch = textContent.match(/Confirmation Required:\s*`?([a-zA-Z0-9_-]+)`?/i);
+    const riskMatch = textContent.match(/Risk Level:\s*`?([A-Z_]+)`?/i);
+    const paramMatch = textContent.match(/Parameters:\s*`?([\s\S]*?)`?(?:\s*-\s*Thread ID:|\s*-\s*Status:|$)/i);
+    const threadMatch = textContent.match(/Thread ID:\s*`?([a-zA-Z0-9_-]+)`?/i);
+
+    const toolName = toolMatch ? toolMatch[1] : "tool";
+    const riskLevel = (riskMatch ? riskMatch[1] : "WRITE") as ToolRiskLevel;
+    const parameters = paramMatch ? paramMatch[1].trim() : "{}";
+    const parsedThreadId = threadMatch ? threadMatch[1] : threadId;
+
+    return (
+      <HITLConfirmationCard
+        toolName={toolName}
+        riskLevel={riskLevel}
+        parameters={parameters}
+        threadId={parsedThreadId}
+        onDecision={(_approved, _res) => {
+          onStreamComplete?.();
+        }}
+      />
+    );
+  }
+
+  // 2. Intercept Tool Executed pattern
   if (textContent.includes("Tool Executed:") || textContent.includes("Tool Call:")) {
     const toolMatch = textContent.match(/Tool (?:Executed|Call):\s*`?([a-zA-Z0-9_-]+)`?/i);
     const paramMatch = textContent.match(/Parameters:\s*`?([\s\S]*?)`?(?:\s*-\s*Result:|\s*-\s*Status:|$)/i);

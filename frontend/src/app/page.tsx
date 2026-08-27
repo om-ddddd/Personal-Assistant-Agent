@@ -5,6 +5,7 @@ import { AssistantRuntimeProvider, type ThreadMessageLike } from "@assistant-ui/
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
+import { PermissionManagerModal } from "@/components/permissions/permission-manager-modal";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
 import {
   useBackendRuntime,
@@ -12,6 +13,8 @@ import {
   fetchThreadHistory,
   createThreadOnBackend,
   deleteThreadOnBackend,
+  fetchPendingConfirmations,
+  checkThreadInterrupt,
   ThreadSession,
 } from "@/lib/agent-runtime";
 import {
@@ -20,6 +23,9 @@ import {
   Terminal,
   Cpu,
   Shield,
+  Calendar,
+  Mail,
+  FileCode,
 } from "lucide-react";
 
 interface ActiveChatProps {
@@ -40,7 +46,10 @@ function ActiveChatSession({
     let isMounted = true;
     async function loadHistory() {
       setHistoryLoaded(false);
-      const rawHistory = await fetchThreadHistory(threadId);
+      const [rawHistory, interruptState] = await Promise.all([
+        fetchThreadHistory(threadId),
+        checkThreadInterrupt(threadId),
+      ]);
       if (!isMounted) return;
 
       const formatted: ThreadMessageLike[] = rawHistory.map((m) => ({
@@ -48,6 +57,27 @@ function ActiveChatSession({
         role: m.role,
         content: [{ type: "text", text: m.content }],
       }));
+
+      // If thread is currently interrupted waiting for HITL approval, inject a confirmation block in messages
+      if (interruptState && interruptState.interrupted && interruptState.payload && interruptState.payload.length > 0) {
+        const payload = interruptState.payload[0];
+        if (payload.tools && payload.tools.length > 0) {
+          const firstTool = payload.tools[0];
+          const toolArgs = typeof firstTool.args === "string" ? firstTool.args : JSON.stringify(firstTool.args);
+          const confirmationBlock =
+            `> **Confirmation Required: \`${firstTool.name}\`**  \n` +
+            `> - **Risk Level**: \`${firstTool.riskLevel}\`  \n` +
+            `> - **Parameters**: \`${toolArgs}\`  \n` +
+            `> - **Thread ID**: \`${threadId}\`  \n` +
+            `> - **Status**: \`Awaiting Approval\`\n\n`;
+
+          formatted.push({
+            id: `interrupt-${threadId}`,
+            role: "assistant",
+            content: [{ type: "text", text: confirmationBlock }],
+          });
+        }
+      }
 
       setInitialMessages(formatted);
       setHistoryLoaded(true);
@@ -101,7 +131,11 @@ function ActiveChatSessionInner({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread activeModelName="Groq (openai/gpt-oss-120b)" />
+      <Thread
+        activeModelName="NVIDIA Nemotron / Groq"
+        threadId={threadId}
+        onStreamComplete={onStreamComplete}
+      />
     </AssistantRuntimeProvider>
   );
 }
@@ -112,9 +146,11 @@ function ActiveChatSessionInner({
 function StartConversationHero({
   onStartNew,
   isCreating,
+  onOpenPermissionManager,
 }: {
   onStartNew: () => void;
   isCreating: boolean;
+  onOpenPermissionManager: () => void;
 }) {
   return (
     <div className="h-full w-full flex flex-col items-center justify-center p-6 text-center select-none bg-radial-glow overflow-y-auto">
@@ -135,7 +171,7 @@ function StartConversationHero({
             Developer Personal Assistant
           </h2>
           <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
-            LangGraph multi-agent engine powered by Groq. Start a new conversation to analyze code, run arithmetic calculations, and manage developer workflows.
+            LangGraph agent engine with Filesystem MCP, GitHub MCP, and Google Workspace. Protected by human-in-the-loop permission gates.
           </p>
         </div>
 
@@ -159,20 +195,23 @@ function StartConversationHero({
           <div className="p-3 rounded-lg bg-zinc-900/60 border border-zinc-800/60 space-y-1">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
               <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Tool Execution</span>
+              <span>Safe Tools (READ)</span>
             </div>
             <p className="text-[11px] text-zinc-500">
-              Integrated calculator, system time, and GitHub tools.
+              Instant execution for math, time, repo inspection, and file reads.
             </p>
           </div>
 
-          <div className="p-3 rounded-lg bg-zinc-900/60 border border-zinc-800/60 space-y-1">
+          <div
+            onClick={onOpenPermissionManager}
+            className="p-3 rounded-lg bg-zinc-900/60 border border-zinc-800/60 hover:border-zinc-700 cursor-pointer space-y-1 transition-all"
+          >
             <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
-              <Shield className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Thread Memory</span>
+              <Shield className="w-3.5 h-3.5 text-amber-400" />
+              <span>HITL Gates (WRITE)</span>
             </div>
             <p className="text-[11px] text-zinc-500">
-              State checkpoints preserved per session.
+              Interactive approval cards for scheduling, emails, and mutations.
             </p>
           </div>
         </div>
@@ -193,11 +232,25 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<ModelOption>(AVAILABLE_MODELS[0]);
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
+  const [pendingConfirmationsCount, setPendingConfirmationsCount] = useState(0);
+
+  // Poll pending confirmations count
+  const refreshPendingCount = useCallback(async () => {
+    try {
+      const pending = await fetchPendingConfirmations();
+      const activeCount = pending.filter((p) => p.status === "PENDING").length;
+      setPendingConfirmationsCount(activeCount);
+    } catch {
+      // Ignore poll error
+    }
+  }, []);
 
   // Load threads from backend
   const refreshSessions = useCallback(async () => {
     const threadList = await fetchThreads();
     setSessions(threadList);
+    refreshPendingCount();
     if (threadList.length > 0) {
       setActiveSessionId((current) => {
         if (current && threadList.some((t) => t.id === current)) {
@@ -212,12 +265,15 @@ export default function Home() {
     } else {
       setActiveSessionId("");
     }
-  }, []);
+  }, [refreshPendingCount]);
 
   useEffect(() => {
     let isMounted = true;
     async function init() {
-      const threadList = await fetchThreads();
+      const [threadList] = await Promise.all([
+        fetchThreads(),
+        refreshPendingCount(),
+      ]);
       if (!isMounted) return;
       setSessions(threadList);
       if (threadList.length > 0) {
@@ -234,10 +290,14 @@ export default function Home() {
     }
 
     init();
+
+    // Periodic poll for pending approvals count
+    const interval = setInterval(refreshPendingCount, 5000);
     return () => {
       isMounted = false;
+      clearInterval(interval);
     };
-  }, []);
+  }, [refreshPendingCount]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -303,6 +363,8 @@ export default function Home() {
         isOpen={isSidebarOpen}
         onToggleOpen={() => setIsSidebarOpen(!isSidebarOpen)}
         isNewSessionDisabled={activeSession ? activeSession.messageCount === 0 : false}
+        onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
+        pendingConfirmationsCount={pendingConfirmationsCount}
       />
 
       {/* Main Content Area */}
@@ -315,6 +377,8 @@ export default function Home() {
           selectedModelId={selectedModel.id}
           onModelSelect={handleModelSelect}
           isBackendHealthy={isBackendHealthy}
+          onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
+          pendingConfirmationsCount={pendingConfirmationsCount}
         />
 
         {/* Assistant Main Canvas */}
@@ -335,10 +399,18 @@ export default function Home() {
             <StartConversationHero
               onStartNew={handleStartNewSession}
               isCreating={isCreatingSession}
+              onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
             />
           )}
         </main>
       </div>
+
+      {/* Tool Permission Manager Modal */}
+      <PermissionManagerModal
+        isOpen={isPermissionModalOpen}
+        onClose={() => setIsPermissionModalOpen(false)}
+        onRefreshThreads={refreshSessions}
+      />
     </div>
   );
 }

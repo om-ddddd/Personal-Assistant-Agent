@@ -4,6 +4,9 @@ import dotenv from "dotenv";
 import {
   invokeAgent,
   streamAgentEvents,
+  resumeAfterConfirmation,
+  streamResumeEvents,
+  getThreadInterruptState,
   listThreads,
   createThread,
   deleteThread,
@@ -17,6 +20,15 @@ import {
   handleGoogleOAuthCallback,
   getGoogleAuthStatus,
 } from "./tools/google-workspace.js";
+
+// Permission system imports
+import { checkPermission, listRegisteredTools, getRegistrySummary } from "./permissions/registry.js";
+import {
+  listPendingConfirmations,
+  getPendingConfirmation,
+  resolvePendingConfirmation,
+  cleanupExpiredConfirmations,
+} from "./permissions/manager.js";
 
 dotenv.config();
 
@@ -37,6 +49,11 @@ export function createServer() {
   getCompiledAgent().catch((err) => {
     console.error("[Server] Error initializing agent tools:", err);
   });
+
+  // Periodic cleanup of expired pending confirmations (every 60 seconds)
+  setInterval(() => {
+    cleanupExpiredConfirmations();
+  }, 60_000);
 
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
@@ -115,6 +132,172 @@ export function createServer() {
     return res.json({ tools, total: tools.length });
   });
 
+  // =========================================================================
+  //                        PERMISSION ENDPOINTS
+  // =========================================================================
+
+  /**
+   * GET /api/permissions/registry
+   * Returns all registered tools and their risk classifications.
+   */
+  app.get("/api/permissions/registry", (_req: Request, res: Response) => {
+    const tools = listRegisteredTools();
+    const summary = getRegistrySummary();
+    return res.json({
+      tools,
+      summary,
+      total: tools.length,
+    });
+  });
+
+  /**
+   * GET /api/permissions/check/:toolName
+   * Check the permission decision for a specific tool.
+   */
+  app.get("/api/permissions/check/:toolName", (req: Request, res: Response) => {
+    const toolName = String(req.params.toolName);
+    const decision = checkPermission(toolName);
+    return res.json(decision);
+  });
+
+  /**
+   * GET /api/permissions/pending
+   * Lists all pending HITL confirmations, optionally filtered by threadId.
+   */
+  app.get("/api/permissions/pending", (req: Request, res: Response) => {
+    const threadId = req.query.threadId as string | undefined;
+    const pending = listPendingConfirmations(threadId);
+    return res.json({ pending, total: pending.length });
+  });
+
+  /**
+   * GET /api/permissions/pending/:id
+   * Get details of a specific pending confirmation.
+   */
+  app.get("/api/permissions/pending/:id", (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const confirmation = getPendingConfirmation(id);
+    if (!confirmation) {
+      return res.status(404).json({ error: `Pending confirmation "${id}" not found.` });
+    }
+    return res.json(confirmation);
+  });
+
+  /**
+   * POST /api/permissions/confirm/:threadId
+   * Approve or reject a pending tool execution and resume the graph.
+   * Body: { approved: boolean }
+   * This resumes the LangGraph interrupt with the user's decision.
+   */
+  app.post("/api/permissions/confirm/:threadId", async (req: Request, res: Response) => {
+    const threadId = String(req.params.threadId);
+    const { approved } = req.body;
+
+    if (typeof approved !== "boolean") {
+      return res.status(400).json({
+        error: "Request body must include 'approved' as a boolean (true/false).",
+      });
+    }
+
+    try {
+      // Check if thread is actually interrupted
+      const interruptState = await getThreadInterruptState(threadId);
+      if (!interruptState) {
+        return res.status(400).json({
+          error: `Thread "${threadId}" is not currently waiting for confirmation.`,
+        });
+      }
+
+      const result = await resumeAfterConfirmation(threadId, approved);
+      return res.json({
+        threadId,
+        approved,
+        content: result.content,
+      });
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error("[Server] Error resuming after confirmation:", error);
+      return res.status(500).json({
+        error: error.message || "Failed to resume after confirmation.",
+      });
+    }
+  });
+
+  /**
+   * POST /api/permissions/confirm/:threadId/stream
+   * Same as confirm, but returns SSE stream of the resumed execution.
+   */
+  app.post("/api/permissions/confirm/:threadId/stream", async (req: Request, res: Response) => {
+    const threadId = String(req.params.threadId);
+    const { approved } = req.body;
+
+    if (typeof approved !== "boolean") {
+      return res.status(400).json({
+        error: "Request body must include 'approved' as a boolean (true/false).",
+      });
+    }
+
+    // Check if thread is actually interrupted
+    const interruptState = await getThreadInterruptState(threadId);
+    if (!interruptState) {
+      return res.status(400).json({
+        error: `Thread "${threadId}" is not currently waiting for confirmation.`,
+      });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    if (typeof (res as any).flushHeaders === "function") {
+      (res as any).flushHeaders();
+    }
+
+    try {
+      // Emit the decision event first
+      res.write(
+        `data: ${JSON.stringify({
+          type: "confirmation_resolved",
+          threadId,
+          approved,
+        })}\n\n`
+      );
+
+      for await (const event of streamResumeEvents(threadId, approved)) {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error("[Server] Streaming resume error:", error);
+      res.write(`data: ${JSON.stringify({ error: error.message || "Resume streaming failed" })}\n\n`);
+      res.end();
+    }
+  });
+
+  /**
+   * GET /api/threads/:id/interrupt
+   * Check if a thread is currently interrupted and return the interrupt payload.
+   */
+  app.get("/api/threads/:id/interrupt", async (req: Request, res: Response) => {
+    try {
+      const threadId = String(req.params.id);
+      const interruptState = await getThreadInterruptState(threadId);
+      return res.json({
+        threadId,
+        interrupted: !!interruptState,
+        payload: interruptState,
+      });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to check interrupt state" });
+    }
+  });
+
+  // =========================================================================
+  //                          THREAD ENDPOINTS
+  // =========================================================================
+
   // List all distinct thread sessions
   app.get("/api/threads", (_req: Request, res: Response) => {
     const threads = listThreads();
@@ -147,6 +330,10 @@ export function createServer() {
     }
   });
 
+  // =========================================================================
+  //                            CHAT ENDPOINTS
+  // =========================================================================
+
   // Non-streaming chat invocation endpoint
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
@@ -157,6 +344,20 @@ export function createServer() {
       }
 
       const result = await invokeAgent(message, threadId);
+
+      // Check if the graph was interrupted for HITL confirmation
+      const interruptState = await getThreadInterruptState(threadId);
+      if (interruptState) {
+        return res.status(202).json({
+          interrupted: true,
+          threadId,
+          confirmationRequired: true,
+          payload: interruptState,
+          content: result.content,
+          message: "Tool execution requires your confirmation. Use POST /api/permissions/confirm/:threadId to approve or reject.",
+        });
+      }
+
       return res.json({
         content: result.content,
         threadId,
@@ -164,6 +365,25 @@ export function createServer() {
       });
     } catch (err: unknown) {
       const error = err as Error;
+
+      // Check if this is a GraphInterrupt (HITL confirmation needed)
+      if (error.name === "GraphInterrupt" || (error as any).lc_error_code === "GRAPH_INTERRUPT") {
+        // The graph was interrupted for HITL; check interrupt state
+        try {
+          const threadId = req.body.threadId || "default-session";
+          const interruptState = await getThreadInterruptState(threadId);
+          return res.status(202).json({
+            interrupted: true,
+            threadId,
+            confirmationRequired: true,
+            payload: interruptState,
+            message: "Tool execution requires your confirmation. Use POST /api/permissions/confirm/:threadId to approve or reject.",
+          });
+        } catch {
+          // Fall through to generic error
+        }
+      }
+
       console.error("Chat invocation error:", error);
       return res.status(500).json({
         error: error.message || "Failed to invoke LangGraph agent.",
@@ -190,10 +410,45 @@ export function createServer() {
       for await (const event of streamAgentEvents(message, threadId)) {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
+
+      // After stream completes, check if the graph was interrupted for HITL
+      const interruptState = await getThreadInterruptState(threadId);
+      if (interruptState) {
+        res.write(
+          `data: ${JSON.stringify({
+            type: "confirmation_required",
+            threadId,
+            payload: interruptState,
+            message: "Tool execution requires your confirmation.",
+          })}\n\n`
+        );
+      }
+
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (err: unknown) {
       const error = err as Error;
+
+      // Check if this is a GraphInterrupt (HITL confirmation needed)
+      if (error.name === "GraphInterrupt" || (error as any).lc_error_code === "GRAPH_INTERRUPT") {
+        try {
+          const interruptState = await getThreadInterruptState(threadId);
+          res.write(
+            `data: ${JSON.stringify({
+              type: "confirmation_required",
+              threadId,
+              payload: interruptState,
+              message: "Tool execution requires your confirmation.",
+            })}\n\n`
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        } catch {
+          // Fall through to generic error
+        }
+      }
+
       console.error("Streaming error:", error);
       res.write(`data: ${JSON.stringify({ error: error.message || "Streaming failed" })}\n\n`);
       res.end();

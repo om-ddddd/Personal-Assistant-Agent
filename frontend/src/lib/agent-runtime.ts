@@ -3,6 +3,47 @@
 import { useLocalRuntime, type ChatModelAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
+export type ToolRiskLevel = "READ" | "WRITE" | "DESTRUCTIVE";
+
+export interface ToolPermissionEntry {
+  toolName: string;
+  riskLevel: ToolRiskLevel;
+  description: string;
+}
+
+export interface PermissionRegistryResponse {
+  tools: ToolPermissionEntry[];
+  summary: Record<ToolRiskLevel, string[]>;
+  total: number;
+}
+
+export interface PendingConfirmation {
+  id: string;
+  threadId: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  riskLevel: ToolRiskLevel;
+  description: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+export interface ThreadInterruptState {
+  threadId: string;
+  interrupted: boolean;
+  payload: Array<{
+    type: "confirmation_required";
+    tools: Array<{
+      name: string;
+      args: Record<string, unknown>;
+      callId: string;
+      riskLevel: ToolRiskLevel;
+    }>;
+    message: string;
+  }> | null;
+}
+
 export interface ThreadSession {
   id: string;
   title: string;
@@ -22,6 +63,7 @@ interface BackendRuntimeOptions {
   backendUrl?: string;
   initialMessages?: readonly ThreadMessageLike[];
   onStreamComplete?: () => void;
+  onInterruptDetected?: (interruptState: ThreadInterruptState) => void;
 }
 
 const DEFAULT_BACKEND_URL =
@@ -106,13 +148,97 @@ export async function deleteThreadOnBackend(
 }
 
 /**
+ * Fetch full tool permission registry from the backend
+ */
+export async function fetchPermissionRegistry(
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<PermissionRegistryResponse | null> {
+  try {
+    const res = await fetch(`${backendUrl}/api/permissions/registry`, {
+      method: "GET",
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error("Failed to fetch permission registry:", err);
+    return null;
+  }
+}
+
+/**
+ * Fetch all pending confirmations across threads
+ */
+export async function fetchPendingConfirmations(
+  threadId?: string,
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<PendingConfirmation[]> {
+  try {
+    const url = threadId
+      ? `${backendUrl}/api/permissions/pending?threadId=${encodeURIComponent(threadId)}`
+      : `${backendUrl}/api/permissions/pending`;
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.pending || [];
+  } catch (err) {
+    console.error("Failed to fetch pending confirmations:", err);
+    return [];
+  }
+}
+
+/**
+ * Check if a thread is currently in interrupted (waiting for HITL approval) state
+ */
+export async function checkThreadInterrupt(
+  threadId: string,
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<ThreadInterruptState | null> {
+  try {
+    const res = await fetch(`${backendUrl}/api/threads/${encodeURIComponent(threadId)}/interrupt`, {
+      method: "GET",
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error("Failed to check thread interrupt state:", err);
+    return null;
+  }
+}
+
+/**
+ * Submit user decision (Approve / Reject) for a paused thread
+ */
+export async function confirmToolExecution(
+  threadId: string,
+  approved: boolean,
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<{ content?: string; error?: string }> {
+  try {
+    const res = await fetch(`${backendUrl}/api/permissions/confirm/${encodeURIComponent(threadId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { error: data.error || `HTTP error ${res.status}` };
+    }
+    return { content: data.content };
+  } catch (err: unknown) {
+    const error = err as Error;
+    return { error: error.message || "Failed to confirm execution." };
+  }
+}
+
+/**
  * Creates a ChatModelAdapter connected to the Express + LangGraph backend
- * with real-time SSE streaming, tool call execution displays, and error fallbacks.
+ * with real-time SSE streaming, tool call execution displays, HITL confirmation detection, and error fallbacks.
  */
 export function createBackendChatModel(
   threadId: string,
   backendUrl: string = DEFAULT_BACKEND_URL,
-  onStreamComplete?: () => void
+  onStreamComplete?: () => void,
+  onInterruptDetected?: (interruptState: ThreadInterruptState) => void
 ): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -192,6 +318,43 @@ export function createBackendChatModel(
                     },
                   ],
                 };
+              } else if (parsed.type === "confirmation_required") {
+                // HITL confirmation requested by permission gate
+                const payload = parsed.payload;
+                let toolName = "tool";
+                let riskLevel: ToolRiskLevel = "WRITE";
+                let toolArgs = "{}";
+
+                if (Array.isArray(payload) && payload.length > 0 && payload[0].tools?.length > 0) {
+                  const firstTool = payload[0].tools[0];
+                  toolName = firstTool.name;
+                  riskLevel = firstTool.riskLevel || "WRITE";
+                  toolArgs = typeof firstTool.args === "string" ? firstTool.args : JSON.stringify(firstTool.args);
+                }
+
+                const confirmationBlock =
+                  `\n\n> **Confirmation Required: \`${toolName}\`**  \n` +
+                  `> - **Risk Level**: \`${riskLevel}\`  \n` +
+                  `> - **Parameters**: \`${toolArgs}\`  \n` +
+                  `> - **Thread ID**: \`${threadId}\`  \n` +
+                  `> - **Status**: \`Awaiting Approval\`\n\n`;
+
+                accumulatedText += confirmationBlock;
+
+                yield {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: accumulatedText,
+                    },
+                  ],
+                };
+
+                onInterruptDetected?.({
+                  threadId,
+                  interrupted: true,
+                  payload,
+                });
               } else if (parsed.type === "tool_start") {
                 const inputStr = typeof parsed.input === "string" ? parsed.input : JSON.stringify(parsed.input);
                 activeToolInputMap[parsed.tool] = inputStr;
@@ -282,7 +445,7 @@ export function createBackendChatModel(
           `**Troubleshooting Steps**:\n` +
           `1. Verify the backend server is running: \`cd backend && npm run dev\`\n` +
           `2. Check that the backend port is accessible at \`${backendUrl}/health\`\n` +
-          `3. Verify \`GROQ_API_KEY\` is configured in \`backend/.env\``;
+          `3. Verify \`NVIDIA_API_KEY\` or \`GROQ_API_KEY\` is configured in \`backend/.env\``;
 
         yield {
           content: [
@@ -305,6 +468,7 @@ export function useBackendRuntime({
   backendUrl = DEFAULT_BACKEND_URL,
   initialMessages,
   onStreamComplete,
+  onInterruptDetected,
 }: BackendRuntimeOptions) {
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
 
@@ -328,8 +492,8 @@ export function useBackendRuntime({
   }, [checkHealth]);
 
   const adapter = useMemo(
-    () => createBackendChatModel(threadId, backendUrl, onStreamComplete),
-    [threadId, backendUrl, onStreamComplete]
+    () => createBackendChatModel(threadId, backendUrl, onStreamComplete, onInterruptDetected),
+    [threadId, backendUrl, onStreamComplete, onInterruptDetected]
   );
 
   const runtime = useLocalRuntime(adapter, { initialMessages });

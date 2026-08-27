@@ -23,6 +23,8 @@ interface SidebarProps {
   isOpen: boolean;
   onToggleOpen: () => void;
   isNewSessionDisabled?: boolean;
+  onOpenPermissionManager?: () => void;
+  pendingConfirmationsCount?: number;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -53,6 +55,8 @@ export function Sidebar({
   isOpen,
   onToggleOpen,
   isNewSessionDisabled,
+  onOpenPermissionManager,
+  pendingConfirmationsCount = 0,
 }: SidebarProps) {
   return (
     <aside
@@ -73,7 +77,7 @@ export function Sidebar({
                 Dev Assistant
               </h1>
               <p className="text-[10px] text-zinc-500 font-mono truncate">
-                LangGraph + Groq
+                LangGraph + MCP
               </p>
             </div>
           </div>
@@ -196,19 +200,53 @@ export function Sidebar({
               </span>
             </div>
 
-            {/* Status Item 2: Security Gate */}
-            <div className="p-2 rounded bg-zinc-900/70 border border-zinc-800/60 text-[11px] flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-zinc-300">
-                <Shield className="w-3.5 h-3.5 text-indigo-400" />
+            {/* Status Item 2: Security Gate (Clickable) */}
+            <button
+              type="button"
+              onClick={onOpenPermissionManager}
+              className={cn(
+                "w-full p-2 rounded border text-[11px] flex items-center justify-between transition-all text-left",
+                pendingConfirmationsCount > 0
+                  ? "bg-amber-950/40 border-amber-700/80 text-amber-200 animate-pulse hover:bg-amber-950/60"
+                  : "bg-zinc-900/70 hover:bg-zinc-800 border-zinc-800/60 text-zinc-300"
+              )}
+              title="Open Permission Manager & HITL Approvals"
+            >
+              <div className="flex items-center gap-1.5">
+                <Shield className={cn("w-3.5 h-3.5", pendingConfirmationsCount > 0 ? "text-amber-400" : "text-indigo-400")} />
                 <span>Permission Gate</span>
               </div>
-              <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-900/60">
-                Enforced
+              <span
+                className={cn(
+                  "text-[10px] font-mono px-1.5 py-0.5 rounded border",
+                  pendingConfirmationsCount > 0
+                    ? "bg-amber-950 text-amber-300 border-amber-700 font-bold"
+                    : "text-indigo-300 bg-indigo-950/60 border-indigo-900/60"
+                )}
+              >
+                {pendingConfirmationsCount > 0 ? `${pendingConfirmationsCount} Pending` : "Enforced"}
               </span>
-            </div>
+            </button>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2 py-1">
+            <button
+              type="button"
+              onClick={onOpenPermissionManager}
+              className={cn(
+                "p-2 rounded border text-zinc-400 hover:text-zinc-200 transition-colors relative",
+                pendingConfirmationsCount > 0
+                  ? "bg-amber-950/40 border-amber-700/80 text-amber-300 animate-pulse"
+                  : "hover:bg-zinc-900 border-transparent"
+              )}
+              title="Permission Gate"
+            >
+              <Shield className="w-4 h-4" />
+              {pendingConfirmationsCount > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
+              )}
+            </button>
+
             <button
               type="button"
               onClick={onToggleOpen}
