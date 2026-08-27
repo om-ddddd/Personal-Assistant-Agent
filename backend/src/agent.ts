@@ -366,7 +366,7 @@ export async function getCompiledAgent() {
     // Otherwise proceed to tool execution
     return "tools";
   }
-
+  
   /**
    * Custom routing after the agent node.
    * Routes to permissionGate if tool calls are present, otherwise to END.
@@ -392,7 +392,7 @@ export async function getCompiledAgent() {
   compiledAgentInstance = workflow.compile({
     checkpointer,
   });
-
+  // saveGraphImage(compiledAgentInstance, "graph.png");
   return compiledAgentInstance;
 }
 
@@ -835,4 +835,39 @@ export async function getThreadInterruptState(threadId: string): Promise<any | n
   }
 
   return null;
+}
+
+/**
+ * Render and save the LangGraph execution topology as a PNG diagram.
+ * Supports:
+ * - saveGraphImage() -> uses compiled agent and default "graph.png"
+ * - saveGraphImage("my-graph.png") -> uses compiled agent and custom filename
+ * - saveGraphImage(agentInstance, "my-graph.png") -> uses provided agent instance
+ */
+export async function saveGraphImage(
+  appOrFilename?: { getGraph?: () => any; getGraphAsync?: () => Promise<any> } | string,
+  filename = "graph.png"
+): Promise<void> {
+  const fs = await import("node:fs/promises");
+
+  let targetApp: any;
+  let targetFilename = filename;
+
+  if (typeof appOrFilename === "string") {
+    targetFilename = appOrFilename;
+    targetApp = await getCompiledAgent();
+  } else if (appOrFilename && (typeof appOrFilename.getGraph === "function" || typeof appOrFilename.getGraphAsync === "function")) {
+    targetApp = appOrFilename;
+  } else {
+    targetApp = await getCompiledAgent();
+  }
+
+  const graph = typeof targetApp.getGraphAsync === "function"
+    ? await targetApp.getGraphAsync()
+    : targetApp.getGraph();
+
+  const blob = await graph.drawMermaidPng();
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  await fs.writeFile(targetFilename, buffer);
+  console.log(`[Agent] Graph diagram saved to: ${targetFilename}`);
 }
