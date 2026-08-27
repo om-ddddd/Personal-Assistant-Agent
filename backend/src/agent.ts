@@ -1,6 +1,7 @@
 import {
   StateGraph,
   MessagesAnnotation,
+  Annotation,
   MemorySaver,
   START,
   END,
@@ -167,6 +168,26 @@ function formatToolForModel(tool: any) {
 }
 
 /**
+ * Maximum number of agent-tool execution cycles allowed per request
+ * to prevent infinite runaway agent loops.
+ */
+export const MAX_AGENT_LOOPS = 10;
+
+/**
+ * Custom State Annotation with loop counter and message history.
+ */
+export const AgentStateAnnotation = Annotation.Root({
+  messages: Annotation<BaseMessage[]>({
+    reducer: (x, y) => x.concat(y),
+    default: () => [],
+  }),
+  loopCount: Annotation<number>({
+    reducer: (x, y) => (typeof y === "number" ? y : (x || 0)),
+    default: () => 0,
+  }),
+});
+
+/**
  * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution.
  *
  * Graph topology:
@@ -194,7 +215,7 @@ export async function getCompiledAgent() {
   );
 
   console.log(
-    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (${basicTools.length} basic + ${googleWorkspaceTools.length} Google Workspace + ${mcpTools.length} MCP)...`
+    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (3 basic + 6 Google Workspace + ${activeToolsList.length - 9} MCP)...`
   );
 
   const formattedTools = activeToolsList.map(formatToolForModel);
@@ -204,14 +225,27 @@ export async function getCompiledAgent() {
 
   const toolNode = new ToolNode(activeToolsList);
 
-  async function callModel(state: typeof MessagesAnnotation.State) {
+  async function callModel(state: typeof AgentStateAnnotation.State) {
+    const currentLoop = (state.loopCount || 0) + 1;
+
+    // Runaway loop guard: if loop limit reached, stop and return explanation
+    if (currentLoop > MAX_AGENT_LOOPS) {
+      console.warn(
+        `[Agent] Loop guard triggered: reached maximum loop count (${MAX_AGENT_LOOPS}). Terminating.`
+      );
+      const guardMessage = new AIMessage(
+        `I could not complete this task within the allotted step limit (${MAX_AGENT_LOOPS} cycles). To prevent an infinite execution loop, execution has been paused. Please try breaking down your request into smaller steps.`
+      );
+      return { messages: [guardMessage], loopCount: currentLoop };
+    }
+
     const messagesWithSystem: BaseMessage[] = [
       new SystemMessage(SYSTEM_PROMPT),
       ...state.messages,
     ];
 
     const response = await modelWithTools.invoke(messagesWithSystem);
-    return { messages: [response] };
+    return { messages: [response], loopCount: currentLoop };
   }
 
   function isAIMessage(msg: any): boolean {
@@ -240,7 +274,7 @@ export async function getCompiledAgent() {
    * calls interrupt() to pause the graph and wait for human approval.
    * READ tools pass through without interruption.
    */
-  async function permissionGate(state: typeof MessagesAnnotation.State, config?: any) {
+  async function permissionGate(state: typeof AgentStateAnnotation.State, config?: any) {
     const lastMessage = state.messages[state.messages.length - 1];
     const threadId = config?.configurable?.thread_id || "default-session";
 
@@ -289,6 +323,19 @@ export async function getCompiledAgent() {
       })
     );
 
+    // Differentiate prompt friction and message by risk level
+    const hasDestructive = toolsNeedingConfirmation.some((t) => t.riskLevel === "DESTRUCTIVE");
+    const destructiveTools = toolsNeedingConfirmation.filter((t) => t.riskLevel === "DESTRUCTIVE");
+
+    let promptMessage: string;
+    if (hasDestructive) {
+      promptMessage = `CAUTION: Explicit authorization required. The tool "${destructiveTools.map((t) => t.name).join(", ")}" is DESTRUCTIVE and will permanently modify or delete data.`;
+    } else if (toolsNeedingConfirmation.length === 1) {
+      promptMessage = `The tool "${toolsNeedingConfirmation[0].name}" (${toolsNeedingConfirmation[0].riskLevel}) requires your confirmation before execution.`;
+    } else {
+      promptMessage = `${toolsNeedingConfirmation.length} tools require your confirmation before execution.`;
+    }
+
     // Build the confirmation request payload
     const confirmationPayload = {
       type: "confirmation_required" as const,
@@ -298,9 +345,8 @@ export async function getCompiledAgent() {
         callId: t.id,
         riskLevel: t.riskLevel,
       })),
-      message: toolsNeedingConfirmation.length === 1
-        ? `The tool "${toolsNeedingConfirmation[0].name}" (${toolsNeedingConfirmation[0].riskLevel}) requires your confirmation before execution.`
-        : `${toolsNeedingConfirmation.length} tools require your confirmation before execution.`,
+      hasDestructive,
+      message: promptMessage,
     };
 
     console.log(
@@ -344,7 +390,7 @@ export async function getCompiledAgent() {
    * If permissionGate returned rejection ToolMessages, route back to agent.
    * Otherwise, route to the tools node for execution.
    */
-  function afterPermissionGate(state: typeof MessagesAnnotation.State): string {
+  function afterPermissionGate(state: typeof AgentStateAnnotation.State): "tools" | "agent" {
     const lastMessage = state.messages[state.messages.length - 1];
 
     // If the last message is a ToolMessage with rejection, route to agent
@@ -370,8 +416,14 @@ export async function getCompiledAgent() {
   /**
    * Custom routing after the agent node.
    * Routes to permissionGate if tool calls are present, otherwise to END.
+   * If the loop guard is reached, forces route to END.
    */
-  function routeAfterAgent(state: typeof MessagesAnnotation.State): string {
+  function routeAfterAgent(state: typeof AgentStateAnnotation.State): "permissionGate" | "__end__" {
+    // If loop guard was triggered, terminate immediately
+    if ((state.loopCount || 0) > MAX_AGENT_LOOPS) {
+      return "__end__";
+    }
+
     const lastMessage = state.messages[state.messages.length - 1];
     const hasToolCalls = (lastMessage as any)?.tool_calls && (lastMessage as any).tool_calls.length > 0;
     if (isAIMessage(lastMessage) && hasToolCalls) {
@@ -380,19 +432,24 @@ export async function getCompiledAgent() {
     return "__end__";
   }
 
-  const workflow = new StateGraph(MessagesAnnotation)
+  const workflow = new StateGraph(AgentStateAnnotation)
     .addNode("agent", callModel)
     .addNode("permissionGate", permissionGate)
     .addNode("tools", toolNode)
     .addEdge(START, "agent")
-    .addConditionalEdges("agent", routeAfterAgent)
-    .addConditionalEdges("permissionGate", afterPermissionGate)
+    .addConditionalEdges("agent", routeAfterAgent, {
+      permissionGate: "permissionGate",
+      __end__: END,
+    })
+    .addConditionalEdges("permissionGate", afterPermissionGate, {
+      tools: "tools",
+      agent: "agent",
+    })
     .addEdge("tools", "agent");
 
   compiledAgentInstance = workflow.compile({
     checkpointer,
   });
-  // saveGraphImage(compiledAgentInstance, "graph.png");
   return compiledAgentInstance;
 }
 

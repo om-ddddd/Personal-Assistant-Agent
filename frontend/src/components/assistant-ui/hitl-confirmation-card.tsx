@@ -68,8 +68,12 @@ export function HITLConfirmationCard({
     return <Wrench className="w-4 h-4 text-zinc-400" />;
   };
 
+  const [typedConfirmation, setTypedConfirmation] = useState("");
+  const isDestructiveAuthorized = !isDestructive || typedConfirmation.trim().toUpperCase() === "CONFIRM";
+
   const handleAction = async (approved: boolean) => {
     if (isProcessing || status !== "pending") return;
+    if (approved && isDestructive && !isDestructiveAuthorized) return;
     setIsProcessing(true);
     setErrorMessage(null);
 
@@ -239,11 +243,30 @@ export function HITLConfirmationCard({
           </div>
         )}
 
+        {/* Destructive Authorization Prompt */}
+        {status === "pending" && isDestructive && (
+          <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-900/60 space-y-2">
+            <p className="text-[11px] text-rose-300 font-medium">
+              High-Risk Action: Type <span className="font-mono font-bold bg-rose-900/60 px-1.5 py-0.5 rounded text-rose-200">CONFIRM</span> to authorize execution:
+            </p>
+            <input
+              type="text"
+              value={typedConfirmation}
+              onChange={(e) => setTypedConfirmation(e.target.value)}
+              placeholder="Type CONFIRM to authorize"
+              disabled={isProcessing}
+              className="w-full px-3 py-1.5 text-xs bg-zinc-900 border border-rose-800/80 rounded-md text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-mono"
+            />
+          </div>
+        )}
+
         {/* Interactive Approve / Deny Actions */}
         {status === "pending" && (
           <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
             <p className="text-[11px] text-zinc-400 leading-snug">
-              Review parameters above. The agent is paused waiting for your human approval.
+              {isDestructive
+                ? "Explicit typed authorization required before proceeding."
+                : "Review parameters above. The agent is paused waiting for your human approval."}
             </p>
 
             <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end shrink-0">
@@ -259,10 +282,10 @@ export function HITLConfirmationCard({
 
               <button
                 type="button"
-                disabled={isProcessing}
+                disabled={isProcessing || (isDestructive && !isDestructiveAuthorized)}
                 onClick={() => handleAction(true)}
                 className={cn(
-                  "px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed",
+                  "px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed",
                   isDestructive
                     ? "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-950/60"
                     : "bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-amber-950/60"
@@ -276,7 +299,7 @@ export function HITLConfirmationCard({
                 ) : (
                   <>
                     <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Approve & Execute</span>
+                    <span>{isDestructive ? "Authorize & Delete" : "Approve & Execute"}</span>
                   </>
                 )}
               </button>
