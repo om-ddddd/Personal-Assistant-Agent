@@ -20,27 +20,24 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Sparkles,
   Code2,
   ShieldAlert,
   GitBranch,
-  Play,
+  Wrench,
+  Calculator,
+  Clock,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ToolCallPreview, ToolCallData } from "./tool-call-preview";
 
 interface ThreadProps {
   activeModelName?: string;
-  sampleToolCalls?: ToolCallData[];
-  onApproveTool?: (id: string) => void;
-  onRejectTool?: (id: string) => void;
 }
 
 export function Thread({
-  activeModelName = "Llama 3.2 3B",
-  sampleToolCalls = [],
-  onApproveTool,
-  onRejectTool,
+  activeModelName = "Groq (openai/gpt-oss-120b)",
 }: ThreadProps) {
   return (
     <ThreadPrimitive.Root className="flex flex-col h-full bg-zinc-950/50 relative overflow-hidden">
@@ -65,36 +62,36 @@ export function Thread({
             {/* Prompt Starter Suggestions */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
               <ThreadPrimitive.Suggestion
-                prompt="Inspect the repository workspace structure and summarize top-level files"
+                prompt="Calculate (1548 * 372) / 12 and tell me the current time in Tokyo"
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-300">
-                    Inspect Workspace
+                    Run Multi-Tool Math & Time
                   </span>
-                  <Code2 className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
+                  <Calculator className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Inspect the repository file tree and package configuration.
+                  Execute calculator and timezone lookup tools simultaneously.
                 </p>
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="Explain how the Tool Security Gate validates READ, WRITE, and DESTRUCTIVE actions"
+                prompt="What is the current time in London (UTC) and New York (America/New_York)?"
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300">
-                    Tool Security Gate
+                    Check World Time
                   </span>
-                  <ShieldAlert className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
+                  <Clock className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Review permission enforcement for read, write, and destructive actions.
+                  Fetch accurate system timezone and date metrics.
                 </p>
               </ThreadPrimitive.Suggestion>
 
@@ -116,19 +113,19 @@ export function Thread({
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="Test model switching between Local Ollama and Cloud inference"
+                prompt="Explain how the Tool Security Gate validates READ, WRITE, and DESTRUCTIVE actions"
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-cyan-300">
-                    Switch Models
+                    Tool Security Gate
                   </span>
-                  <Sparkles className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
+                  <ShieldAlert className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Learn how local and cloud LLM providers are dynamically instantiated.
+                  Review permission enforcement for read, write, and destructive actions.
                 </p>
               </ThreadPrimitive.Suggestion>
             </div>
@@ -143,16 +140,6 @@ export function Thread({
           }}
         />
 
-        {/* Render sample tool preview cards if any */}
-        {sampleToolCalls.map((toolCall) => (
-          <ToolCallPreview
-            key={toolCall.id}
-            toolCall={toolCall}
-            onApprove={onApproveTool}
-            onReject={onRejectTool}
-          />
-        ))}
-
         <ThreadPrimitive.ScrollToBottom className="absolute bottom-24 right-6 p-2 rounded-full bg-zinc-800/90 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 shadow-lg transition-all" />
       </ThreadPrimitive.Viewport>
 
@@ -160,7 +147,7 @@ export function Thread({
       <div className="p-4 border-t border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md max-w-4xl mx-auto w-full">
         <ComposerPrimitive.Root className="relative flex flex-col rounded-xl bg-zinc-900/90 border border-zinc-800 shadow-xl focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
           <ComposerPrimitive.Input
-            placeholder="Ask a question, run a command, or request code modifications..."
+            placeholder="Ask a question, run a calculation, or request timezone lookups..."
             className="w-full px-4 py-3 bg-transparent text-xs text-zinc-100 placeholder-zinc-500 resize-none outline-none max-h-40 min-h-[52px] leading-relaxed font-sans"
             rows={1}
             autoFocus
@@ -193,6 +180,162 @@ export function Thread({
 }
 
 /**
+ * Interactive Collapsible Tool Execution Card Component
+ */
+function ToolAccordion({
+  toolName,
+  parameters,
+  result,
+  status = "completed",
+}: {
+  toolName: string;
+  parameters: string;
+  result?: string;
+  status?: "running" | "completed";
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  let ToolIcon = Wrench;
+  if (toolName.toLowerCase().includes("calc")) {
+    ToolIcon = Calculator;
+  } else if (toolName.toLowerCase().includes("time")) {
+    ToolIcon = Clock;
+  }
+
+  // Format parameters JSON if valid
+  let formattedParams = parameters;
+  try {
+    const parsed = JSON.parse(parameters);
+    formattedParams = JSON.stringify(parsed, null, 2);
+  } catch {
+    // raw string
+  }
+
+  return (
+    <div className="my-2 rounded-lg border border-zinc-800 bg-zinc-900/90 shadow-sm overflow-hidden text-xs transition-all">
+      {/* Clickable Header Accordion Toggle */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-3 py-2 flex items-center justify-between gap-3 bg-zinc-900 hover:bg-zinc-800/80 text-zinc-200 transition-colors select-none text-left"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-5 h-5 rounded-md bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+            <ToolIcon className="w-3 h-3" />
+          </div>
+          <span className="font-mono font-semibold text-zinc-200 truncate">
+            Tool: {toolName}
+          </span>
+          {status === "running" ? (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-800/60 text-amber-300 animate-pulse shrink-0">
+              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+              Executing
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-800/60 text-emerald-300 shrink-0">
+              <Check className="w-2.5 h-2.5 text-emerald-400" />
+              Executed
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 text-zinc-400 shrink-0">
+          <span className="text-[10px] font-mono text-zinc-500 hidden sm:inline">
+            {isOpen ? "Hide" : "Details"}
+          </span>
+          <ChevronDown
+            className={cn(
+              "w-3.5 h-3.5 text-zinc-400 transition-transform duration-200",
+              isOpen && "rotate-180"
+            )}
+          />
+        </div>
+      </button>
+
+      {/* Expandable Parameters & Output Drawer */}
+      {isOpen && (
+        <div className="p-3 border-t border-zinc-800/80 bg-zinc-950/80 space-y-2 font-mono text-[11px]">
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase font-semibold tracking-wider text-zinc-500">
+              Parameters
+            </div>
+            <pre className="p-2 rounded bg-zinc-900 border border-zinc-800 text-indigo-300 overflow-x-auto whitespace-pre-wrap break-all text-[11px]">
+              {formattedParams}
+            </pre>
+          </div>
+
+          {result && (
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold tracking-wider text-zinc-500">
+                Result
+              </div>
+              <pre className="p-2 rounded bg-zinc-900 border border-zinc-800 text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all text-[11px]">
+                {result}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function extractNodeText(node: React.ReactNode): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (!node) return "";
+  if (Array.isArray(node)) return node.map(extractNodeText).join("");
+  if (React.isValidElement(node) && node.props && (node.props as any).children) {
+    return extractNodeText((node.props as any).children);
+  }
+  return "";
+}
+
+/**
+ * Custom Blockquote that intercepts tool call markdown patterns and renders ToolAccordion
+ */
+function CustomBlockquote(props: React.ComponentPropsWithoutRef<"blockquote">) {
+  const textContent = extractNodeText(props.children);
+
+  if (textContent.includes("Tool Executed:") || textContent.includes("Tool Call:")) {
+    const toolMatch = textContent.match(/Tool (?:Executed|Call):\s*`?([a-zA-Z0-9_-]+)`?/i);
+    const paramMatch = textContent.match(/Parameters:\s*`?([\s\S]*?)`?(?:\s*-\s*Result:|\s*-\s*Status:|$)/i);
+    const resultMatch = textContent.match(/Result:\s*`?([\s\S]*?)`?$/im);
+    const statusMatch = textContent.match(/Status:\s*`?([a-zA-Z0-9_.-]+)`?/i);
+
+    const toolName = toolMatch ? toolMatch[1] : "tool";
+    const parameters = paramMatch ? paramMatch[1].trim() : "{}";
+    const result = resultMatch ? resultMatch[1].trim() : undefined;
+    const isRunning = statusMatch ? statusMatch[1].toLowerCase().includes("executing") : false;
+
+    return (
+      <ToolAccordion
+        toolName={toolName}
+        parameters={parameters}
+        result={result}
+        status={isRunning ? "running" : "completed"}
+      />
+    );
+  }
+
+  return (
+    <blockquote className="border-l-2 border-indigo-500/50 pl-3.5 my-2 text-zinc-400 italic text-xs">
+      {props.children}
+    </blockquote>
+  );
+}
+
+const MarkdownText: React.FC = () => {
+  return (
+    <MarkdownTextPrimitive
+      components={{
+        blockquote: CustomBlockquote,
+      }}
+    />
+  );
+};
+
+/**
  * User Message Component
  */
 function CustomUserMessage() {
@@ -207,10 +350,6 @@ function CustomUserMessage() {
     </MessagePrimitive.Root>
   );
 }
-
-const MarkdownText: React.FC = () => {
-  return <MarkdownTextPrimitive />;
-};
 
 /**
  * Assistant Message Component

@@ -6,7 +6,6 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
-import { ToolCallData } from "@/components/assistant-ui/tool-call-preview";
 import {
   useBackendRuntime,
   fetchThreads,
@@ -26,18 +25,12 @@ import {
 interface ActiveChatProps {
   threadId: string;
   onStreamComplete: () => void;
-  sampleToolCalls: ToolCallData[];
-  onApproveTool: (id: string) => void;
-  onRejectTool: (id: string) => void;
   onHealthStatusChange?: (healthy: boolean | null) => void;
 }
 
 function ActiveChatSession({
   threadId,
   onStreamComplete,
-  sampleToolCalls,
-  onApproveTool,
-  onRejectTool,
   onHealthStatusChange,
 }: ActiveChatProps) {
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -80,9 +73,6 @@ function ActiveChatSession({
       threadId={threadId}
       initialMessages={initialMessages}
       onStreamComplete={onStreamComplete}
-      sampleToolCalls={sampleToolCalls}
-      onApproveTool={onApproveTool}
-      onRejectTool={onRejectTool}
       onHealthStatusChange={onHealthStatusChange}
     />
   );
@@ -92,17 +82,11 @@ function ActiveChatSessionInner({
   threadId,
   initialMessages,
   onStreamComplete,
-  sampleToolCalls,
-  onApproveTool,
-  onRejectTool,
   onHealthStatusChange,
 }: {
   threadId: string;
   initialMessages: ThreadMessageLike[];
   onStreamComplete: () => void;
-  sampleToolCalls: ToolCallData[];
-  onApproveTool: (id: string) => void;
-  onRejectTool: (id: string) => void;
   onHealthStatusChange?: (healthy: boolean | null) => void;
 }) {
   const { runtime, isBackendHealthy } = useBackendRuntime({
@@ -117,22 +101,9 @@ function ActiveChatSessionInner({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread
-        activeModelName="Groq (openai/gpt-oss-120b)"
-        sampleToolCalls={sampleToolCalls}
-        onApproveTool={handleApprovePlaceholder}
-        onRejectTool={handleRejectPlaceholder}
-      />
+      <Thread activeModelName="Groq (openai/gpt-oss-120b)" />
     </AssistantRuntimeProvider>
   );
-
-  function handleApprovePlaceholder(id: string) {
-    onApproveTool(id);
-  }
-
-  function handleRejectPlaceholder(id: string) {
-    onRejectTool(id);
-  }
 }
 
 /**
@@ -268,21 +239,6 @@ export default function Home() {
     };
   }, []);
 
-  // Sample interactive tool calls for UI preview
-  const [sampleToolCalls, setSampleToolCalls] = useState<ToolCallData[]>([
-    {
-      id: "tool-1",
-      name: "safe_terminal_execute",
-      category: "terminal",
-      permissionLevel: "DESTRUCTIVE",
-      arguments: {
-        command: "git reset --hard HEAD~1",
-        workingDirectory: "c:/Users/Ausu vivobook/Desktop/Coding/Personal Assistant Agent",
-      },
-      status: "pending_approval",
-    },
-  ]);
-
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   const handleSelectSession = (id: string) => {
@@ -335,34 +291,6 @@ export default function Home() {
     }
   };
 
-  const handleApproveTool = (id: string) => {
-    setSampleToolCalls((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              status: "completed",
-              output: "Command executed safely in isolated sandbox. Output: HEAD is now at 92c81da",
-            }
-          : t
-      )
-    );
-  };
-
-  const handleRejectTool = (id: string) => {
-    setSampleToolCalls((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              status: "rejected",
-              error: "Execution was rejected by user.",
-            }
-          : t
-      )
-    );
-  };
-
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 antialiased font-sans">
       {/* Navigation Sidebar */}
@@ -401,9 +329,6 @@ export default function Home() {
               key={activeSessionId}
               threadId={activeSessionId}
               onStreamComplete={refreshSessions}
-              sampleToolCalls={sampleToolCalls}
-              onApproveTool={handleApproveTool}
-              onRejectTool={handleRejectTool}
               onHealthStatusChange={setIsBackendHealthy}
             />
           ) : (

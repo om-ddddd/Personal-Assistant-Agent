@@ -107,7 +107,7 @@ export async function deleteThreadOnBackend(
 
 /**
  * Creates a ChatModelAdapter connected to the Express + LangGraph backend
- * with real-time SSE streaming and error fallbacks.
+ * with real-time SSE streaming, tool call execution displays, and error fallbacks.
  */
 export function createBackendChatModel(
   threadId: string,
@@ -136,6 +136,7 @@ export function createBackendChatModel(
       }
 
       let accumulatedText = "";
+      const activeToolInputMap: Record<string, string> = {};
 
       try {
         const response = await fetch(`${backendUrl}/api/chat/stream`, {
@@ -191,7 +192,55 @@ export function createBackendChatModel(
                     },
                   ],
                 };
-              } else if (parsed.text) {
+              } else if (parsed.type === "tool_start") {
+                const inputStr = typeof parsed.input === "string" ? parsed.input : JSON.stringify(parsed.input);
+                activeToolInputMap[parsed.tool] = inputStr;
+
+                const startBlock = `> **Tool Executed: \`${parsed.tool}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Status**: \`Executing...\`\n\n`;
+
+                accumulatedText += `\n\n${startBlock}\n\n`;
+                yield {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: accumulatedText,
+                    },
+                  ],
+                };
+              } else if (parsed.type === "tool_end") {
+                let outputDisplay = parsed.output;
+                try {
+                  const parsedObj = JSON.parse(parsed.output);
+                  if (parsedObj.result !== undefined) {
+                    outputDisplay = `${parsedObj.result}`;
+                  } else if (parsedObj.currentTime !== undefined) {
+                    outputDisplay = `${parsedObj.currentTime} (${parsedObj.timezone})`;
+                  }
+                } catch {
+                  // use raw outputDisplay
+                }
+
+                const inputStr = activeToolInputMap[parsed.tool] || "{}";
+                const completedBlock = `> **Tool Executed: \`${parsed.tool}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Result**: \`${outputDisplay}\`\n\n---`;
+
+                if (accumulatedText.includes('`Executing...`')) {
+                  accumulatedText = accumulatedText.replace(
+                    new RegExp(`> \\*\\*Tool Executed: \`${parsed.tool}\`\\*\\*[\\s\\S]*?> - \\*\\*Status\\*\\*: \`Executing\\.\\.\\.\``, 'g'),
+                    completedBlock
+                  );
+                } else {
+                  accumulatedText += `\n\n${completedBlock}\n\n`;
+                }
+
+                yield {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: accumulatedText,
+                    },
+                  ],
+                };
+              } else if (parsed.type === "text" || parsed.text) {
                 accumulatedText += parsed.text;
                 yield {
                   content: [

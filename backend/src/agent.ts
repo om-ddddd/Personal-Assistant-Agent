@@ -161,7 +161,58 @@ export const agent = workflow.compile({
 });
 
 /**
- * Retrieve thread state history from LangGraph checkpointer
+ * Roll back thread state in MemorySaver checkpointer to targetMessages
+ */
+export async function rewindThreadState(threadId: string, targetMessages: BaseMessage[]) {
+  const config = { configurable: { thread_id: threadId } };
+
+  if (checkpointer && (checkpointer as any).storage) {
+    const storage = (checkpointer as any).storage;
+    if (typeof storage.delete === "function") {
+      storage.delete(threadId);
+    } else if (storage[threadId]) {
+      delete storage[threadId];
+    }
+  }
+
+  if (targetMessages.length > 0) {
+    await (checkpointer as any).put(
+      config,
+      {
+        v: 1,
+        id: crypto.randomUUID(),
+        ts: new Date().toISOString(),
+        channel_values: { messages: targetMessages },
+        channel_versions: { messages: 1 },
+        versions_seen: {},
+      },
+      {}
+    );
+  }
+}
+
+/**
+ * Format markdown tool card for persistent history and stream
+ */
+function formatToolCard(toolName: string, input: any, output: any): string {
+  const inputStr = typeof input === "string" ? input : JSON.stringify(input);
+  let outputDisplay = typeof output === "string" ? output : JSON.stringify(output);
+  try {
+    const parsed = JSON.parse(outputDisplay);
+    if (parsed.result !== undefined) {
+      outputDisplay = `${parsed.result}`;
+    } else if (parsed.currentTime !== undefined) {
+      outputDisplay = `${parsed.currentTime} (${parsed.timezone})`;
+    }
+  } catch {
+    // keep raw
+  }
+
+  return `> **Tool Executed: \`${toolName}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Result**: \`${outputDisplay}\`\n\n---`;
+}
+
+/**
+ * Retrieve thread state history from LangGraph checkpointer with formatted tool execution cards
  */
 export async function getThreadHistory(threadId: string) {
   const config = {
@@ -178,9 +229,13 @@ export async function getThreadHistory(threadId: string) {
   const rawMessages: BaseMessage[] = state.values.messages;
   const history: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
 
+  let pendingToolCards: string[] = [];
+  const pendingToolCallsMap = new Map<string, { name: string; args: any }>();
+
   for (const m of rawMessages) {
     const isHuman = m instanceof HumanMessage || (typeof m.getType === "function" && m.getType() === "human");
     const isAI = m instanceof AIMessage || (typeof m.getType === "function" && m.getType() === "ai");
+    const isTool = m instanceof ToolMessage || (typeof m.getType === "function" && m.getType() === "tool");
 
     if (isHuman) {
       const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
@@ -191,16 +246,46 @@ export async function getThreadHistory(threadId: string) {
           content: text,
         });
       }
+      pendingToolCards = [];
+      pendingToolCallsMap.clear();
     } else if (isAI) {
+      const aiMsg = m as AIMessage;
+      if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
+        for (const tc of aiMsg.tool_calls) {
+          const callId = tc.id || tc.name;
+          pendingToolCallsMap.set(callId, { name: tc.name, args: tc.args });
+        }
+      }
+
       const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
       if (text.trim()) {
+        const fullContent = pendingToolCards.length > 0
+          ? `${pendingToolCards.join("\n\n")}\n\n${text}`
+          : text;
+
         history.push({
           id: m.id || crypto.randomUUID(),
           role: "assistant",
-          content: text,
+          content: fullContent,
         });
+        pendingToolCards = [];
+        pendingToolCallsMap.clear();
       }
+    } else if (isTool) {
+      const toolMsg = m as ToolMessage;
+      const callId = (toolMsg.tool_call_id || toolMsg.name || "tool") as string;
+      const tc = pendingToolCallsMap.get(callId) || { name: toolMsg.name || "tool", args: {} };
+      const card = formatToolCard(tc.name, tc.args, toolMsg.content);
+      pendingToolCards.push(card);
     }
+  }
+
+  if (pendingToolCards.length > 0) {
+    history.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: pendingToolCards.join("\n\n"),
+    });
   }
 
   return history;
@@ -210,13 +295,37 @@ export async function getThreadHistory(threadId: string) {
  * Helper to invoke the agent for a given thread
  */
 export async function invokeAgent(prompt: string, threadId: string = "default-thread") {
-  touchThread(threadId, prompt);
-
   const config = {
     configurable: {
       thread_id: threadId,
     },
   };
+
+  // Regeneration detection
+  const state = await agent.getState(config);
+  if (state && state.values && state.values.messages && state.values.messages.length > 0) {
+    const currentMsgs: BaseMessage[] = state.values.messages;
+    let lastHumanIdx = -1;
+    for (let i = currentMsgs.length - 1; i >= 0; i--) {
+      const m = currentMsgs[i];
+      const isHuman = m instanceof HumanMessage || (typeof m.getType === "function" && m.getType() === "human");
+      if (isHuman) {
+        lastHumanIdx = i;
+        break;
+      }
+    }
+
+    if (lastHumanIdx !== -1) {
+      const lastHuman = currentMsgs[lastHumanIdx];
+      const lastText = typeof lastHuman.content === "string" ? lastHuman.content : JSON.stringify(lastHuman.content);
+      if (lastText.trim() === prompt.trim()) {
+        const rewound = currentMsgs.slice(0, lastHumanIdx);
+        await rewindThreadState(threadId, rewound);
+      }
+    }
+  }
+
+  touchThread(threadId, prompt);
 
   const result = await agent.invoke(
     {
@@ -240,13 +349,37 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
  * Helper to stream raw token chunks and tool events from LangGraph using streamEvents
  */
 export async function* streamAgentEvents(prompt: string, threadId: string = "default-thread") {
-  touchThread(threadId, prompt);
-
   const config = {
     configurable: {
       thread_id: threadId,
     },
   };
+
+  // Regeneration detection: if last human message is identical to incoming prompt, rewind previous turn
+  const state = await agent.getState(config);
+  if (state && state.values && state.values.messages && state.values.messages.length > 0) {
+    const currentMsgs: BaseMessage[] = state.values.messages;
+    let lastHumanIdx = -1;
+    for (let i = currentMsgs.length - 1; i >= 0; i--) {
+      const m = currentMsgs[i];
+      const isHuman = m instanceof HumanMessage || (typeof m.getType === "function" && m.getType() === "human");
+      if (isHuman) {
+        lastHumanIdx = i;
+        break;
+      }
+    }
+
+    if (lastHumanIdx !== -1) {
+      const lastHuman = currentMsgs[lastHumanIdx];
+      const lastText = typeof lastHuman.content === "string" ? lastHuman.content : JSON.stringify(lastHuman.content);
+      if (lastText.trim() === prompt.trim()) {
+        const rewound = currentMsgs.slice(0, lastHumanIdx);
+        await rewindThreadState(threadId, rewound);
+      }
+    }
+  }
+
+  touchThread(threadId, prompt);
 
   const eventStream = agent.streamEvents(
     {
@@ -271,16 +404,29 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
         yield { type: "text", text };
       }
     } else if (event.event === "on_tool_start") {
+      let rawInput = event.data?.input;
+      if (rawInput && typeof rawInput.input === "string") {
+        try {
+          rawInput = JSON.parse(rawInput.input);
+        } catch {
+          rawInput = rawInput.input;
+        }
+      }
       yield {
         type: "tool_start",
         tool: event.name,
-        input: event.data?.input,
+        input: rawInput,
       };
     } else if (event.event === "on_tool_end") {
+      let rawOutput = event.data?.output;
+      if (rawOutput && typeof rawOutput === "object" && "content" in rawOutput) {
+        rawOutput = rawOutput.content;
+      }
+      const outputStr = typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput);
       yield {
         type: "tool_end",
         tool: event.name,
-        output: typeof event.data?.output === "string" ? event.data.output : JSON.stringify(event.data?.output),
+        output: outputStr,
       };
     }
   }
