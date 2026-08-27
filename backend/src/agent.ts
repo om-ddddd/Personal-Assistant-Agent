@@ -9,17 +9,19 @@ import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { model } from "./models.js";
 import { basicTools } from "./tools/basic.js";
+import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
 
 const SYSTEM_PROMPT = `You are an expert Developer Personal Assistant Agent.
 You assist developers with:
-1. Code analysis, refactoring, and debugging.
-2. Architecture design and implementation planning.
-3. Git workflow, issue tracking, and PR reviews.
-4. Explaining tools and executing system tasks.
+1. Navigating and managing the workspace filesystem via Filesystem MCP tools (read_text_file, list_directory, search_files, write_file, edit_file, etc.).
+2. Mathematical calculations (calculator) and system time queries (get_time).
+3. GitHub repository operations and code reviews via GitHub MCP tools and list_my_github_repositories.
+4. Analyzing, refactoring, and debugging source code.
 
-You have access to tools such as calculator and get_time. Always use the appropriate tool when calculations or date/time queries are requested.
-
+When the user asks to inspect, read, search, or list files in the project or workspace, ALWAYS use the appropriate Filesystem MCP tool.
+When the user asks to list, inspect, or describe their own GitHub repositories, ALWAYS use the list_my_github_repositories tool.
 Always provide concise, clear, and high-quality technical answers.
 Do not use emojis in your responses.`;
 
@@ -35,7 +37,7 @@ export interface ThreadMetadata {
 }
 
 /**
- * In-memory thread registry (ready to be swapped with PostgreSQL / Prisma in Phase 1)
+ * In-memory thread registry
  */
 const threadStore = new Map<string, ThreadMetadata>();
 
@@ -116,49 +118,90 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
 }
 
 /**
- * Bind available tools to the LLM
- */
-export const modelWithTools = model.bindTools(basicTools);
-
-/**
- * Tool execution node powered by LangGraph ToolNode
- */
-export const toolNode = new ToolNode(basicTools);
-
-/**
- * Core reasoning node that invokes the active model with conversation state and tool binding.
- */
-async function callModel(state: typeof MessagesAnnotation.State) {
-  const messagesWithSystem: BaseMessage[] = [
-    new SystemMessage(SYSTEM_PROMPT),
-    ...state.messages,
-  ];
-
-  const response = await modelWithTools.invoke(messagesWithSystem);
-  return { messages: [response] };
-}
-
-/**
- * LangGraph Agent StateGraph workflow with ToolNode & Conditional Routing
- */
-const workflow = new StateGraph(MessagesAnnotation)
-  .addNode("agent", callModel)
-  .addNode("tools", toolNode)
-  .addEdge(START, "agent")
-  .addConditionalEdges("agent", toolsCondition)
-  .addEdge("tools", "agent");
-
-/**
  * In-memory checkpointer for multi-turn thread retention
  */
 export const checkpointer = new MemorySaver();
 
+let compiledAgentInstance: any = null;
+let activeToolsList: any[] = [...basicTools];
+
+function formatToolForModel(tool: any) {
+  let parameters: any = { type: "object", properties: {} };
+  if (tool.schema) {
+    if (tool.schema._def) {
+      parameters = zodToJsonSchema(tool.schema);
+    } else {
+      parameters = tool.schema;
+    }
+  }
+
+  return {
+    type: "function" as const,
+    function: {
+      name: tool.name,
+      description: tool.description || "",
+      parameters,
+    },
+  };
+}
+
 /**
- * Compiled LangGraph Agent
+ * Builds or retrieves the compiled LangGraph agent with all basic and MCP tools attached
  */
-export const agent = workflow.compile({
-  checkpointer,
-});
+export async function getCompiledAgent() {
+  if (compiledAgentInstance) {
+    return compiledAgentInstance;
+  }
+
+  // Load MCP tools from Filesystem MCP / GitHub MCP servers
+  const mcpTools = await initializeMcpClient();
+  activeToolsList = [...basicTools, ...mcpTools];
+
+  console.log(
+    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (${basicTools.length} basic + ${mcpTools.length} MCP)...`
+  );
+
+  const formattedTools = activeToolsList.map(formatToolForModel);
+  const modelWithTools = (typeof (model as any).bind === "function")
+    ? (model as any).bind({ tools: formattedTools })
+    : model.bindTools(activeToolsList);
+
+  const toolNode = new ToolNode(activeToolsList);
+
+  async function callModel(state: typeof MessagesAnnotation.State) {
+    const messagesWithSystem: BaseMessage[] = [
+      new SystemMessage(SYSTEM_PROMPT),
+      ...state.messages,
+    ];
+
+    const response = await modelWithTools.invoke(messagesWithSystem);
+    return { messages: [response] };
+  }
+
+  const workflow = new StateGraph(MessagesAnnotation)
+    .addNode("agent", callModel)
+    .addNode("tools", toolNode)
+    .addEdge(START, "agent")
+    .addConditionalEdges("agent", toolsCondition)
+    .addEdge("tools", "agent");
+
+  compiledAgentInstance = workflow.compile({
+    checkpointer,
+  });
+
+  return compiledAgentInstance;
+}
+
+/**
+ * Returns all active tools (basic + MCP)
+ */
+export function getActiveTools() {
+  return activeToolsList.map((t) => ({
+    name: t.name,
+    description: t.description || "",
+    schema: (t as any).schema ? Object.keys((t as any).schema.shape || {}) : [],
+  }));
+}
 
 /**
  * Roll back thread state in MemorySaver checkpointer to targetMessages
@@ -185,7 +228,9 @@ export async function rewindThreadState(threadId: string, targetMessages: BaseMe
         channel_values: { messages: targetMessages },
         channel_versions: { messages: 1 },
         versions_seen: {},
+        pending_sends: [],
       },
+      {},
       {}
     );
   }
@@ -197,15 +242,26 @@ export async function rewindThreadState(threadId: string, targetMessages: BaseMe
 function formatToolCard(toolName: string, input: any, output: any): string {
   const inputStr = typeof input === "string" ? input : JSON.stringify(input);
   let outputDisplay = typeof output === "string" ? output : JSON.stringify(output);
+
   try {
     const parsed = JSON.parse(outputDisplay);
     if (parsed.result !== undefined) {
       outputDisplay = `${parsed.result}`;
     } else if (parsed.currentTime !== undefined) {
       outputDisplay = `${parsed.currentTime} (${parsed.timezone})`;
+    } else if (parsed.content && Array.isArray(parsed.content)) {
+      // MCP content block array formatting
+      outputDisplay = parsed.content
+        .map((c: any) => (typeof c.text === "string" ? c.text : JSON.stringify(c)))
+        .join("\n");
     }
   } catch {
     // keep raw
+  }
+
+  // Truncate overly long tool output in history cards if necessary
+  if (outputDisplay.length > 1500) {
+    outputDisplay = outputDisplay.slice(0, 1500) + "\n... [truncated for display]";
   }
 
   return `> **Tool Executed: \`${toolName}\`**  \n> - **Parameters**: \`${inputStr}\`  \n> - **Result**: \`${outputDisplay}\`\n\n---`;
@@ -215,13 +271,14 @@ function formatToolCard(toolName: string, input: any, output: any): string {
  * Retrieve thread state history from LangGraph checkpointer with formatted tool execution cards
  */
 export async function getThreadHistory(threadId: string) {
+  const agentInstance = await getCompiledAgent();
   const config = {
     configurable: {
       thread_id: threadId,
     },
   };
 
-  const state = await agent.getState(config);
+  const state = await agentInstance.getState(config);
   if (!state || !state.values || !state.values.messages) {
     return [];
   }
@@ -295,6 +352,7 @@ export async function getThreadHistory(threadId: string) {
  * Helper to invoke the agent for a given thread
  */
 export async function invokeAgent(prompt: string, threadId: string = "default-thread") {
+  const agentInstance = await getCompiledAgent();
   const config = {
     configurable: {
       thread_id: threadId,
@@ -302,7 +360,7 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
   };
 
   // Regeneration detection
-  const state = await agent.getState(config);
+  const state = await agentInstance.getState(config);
   if (state && state.values && state.values.messages && state.values.messages.length > 0) {
     const currentMsgs: BaseMessage[] = state.values.messages;
     let lastHumanIdx = -1;
@@ -327,7 +385,7 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
 
   touchThread(threadId, prompt);
 
-  const result = await agent.invoke(
+  const result = await agentInstance.invoke(
     {
       messages: [new HumanMessage(prompt)],
     },
@@ -349,6 +407,7 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
  * Helper to stream raw token chunks and tool events from LangGraph using streamEvents
  */
 export async function* streamAgentEvents(prompt: string, threadId: string = "default-thread") {
+  const agentInstance = await getCompiledAgent();
   const config = {
     configurable: {
       thread_id: threadId,
@@ -356,7 +415,7 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
   };
 
   // Regeneration detection: if last human message is identical to incoming prompt, rewind previous turn
-  const state = await agent.getState(config);
+  const state = await agentInstance.getState(config);
   if (state && state.values && state.values.messages && state.values.messages.length > 0) {
     const currentMsgs: BaseMessage[] = state.values.messages;
     let lastHumanIdx = -1;
@@ -381,7 +440,7 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
 
   touchThread(threadId, prompt);
 
-  const eventStream = agent.streamEvents(
+  const eventStream = agentInstance.streamEvents(
     {
       messages: [new HumanMessage(prompt)],
     },
@@ -430,13 +489,4 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
       };
     }
   }
-}
-
-export async function saveGraphImage(filename = "graph.png"): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const graph = await agent.getGraphAsync();
-  const blob = await graph.drawMermaidPng();
-  const buffer = Buffer.from(await blob.arrayBuffer());
-  await fs.writeFile(filename, buffer);
-  console.log(`Graph diagram saved to: ${filename}`);
 }

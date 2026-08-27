@@ -8,7 +8,10 @@ import {
   createThread,
   deleteThread,
   getThreadHistory,
+  getCompiledAgent,
+  getActiveTools,
 } from "./agent.js";
+import { closeMcpClient } from "./mcp/client.js";
 
 dotenv.config();
 
@@ -24,14 +27,26 @@ export function createServer() {
   );
   app.use(express.json());
 
+  // Proactively initialize agent and MCP client
+  getCompiledAgent().catch((err) => {
+    console.error("[Server] Error initializing agent tools:", err);
+  });
+
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
     res.json({
       status: "ok",
       service: "developer-personal-assistant-backend",
-      model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
+      mcp: "connected",
+      model: process.env.NVIDIA_MODEL || process.env.GROQ_MODEL || "nvidia/nemotron-3-super-120b-a12b",
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // List all registered tools (basic + MCP)
+  app.get("/api/tools", (_req: Request, res: Response) => {
+    const tools = getActiveTools();
+    return res.json({ tools, total: tools.length });
   });
 
   // List all distinct thread sessions
@@ -79,6 +94,7 @@ export function createServer() {
       return res.json({
         content: result.content,
         threadId,
+        toolCallsCount: result.toolCallsCount,
       });
     } catch (err: unknown) {
       const error = err as Error;
@@ -116,6 +132,17 @@ export function createServer() {
       res.write(`data: ${JSON.stringify({ error: error.message || "Streaming failed" })}\n\n`);
       res.end();
     }
+  });
+
+  // Handle process cleanup
+  process.on("SIGINT", async () => {
+    await closeMcpClient();
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", async () => {
+    await closeMcpClient();
+    process.exit(0);
   });
 
   return app;

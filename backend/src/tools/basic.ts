@@ -99,6 +99,74 @@ export const getTimeTool = tool(
 );
 
 /**
+ * List My GitHub Repositories Tool: Direct authenticated repository retrieval
+ */
+export const listMyGithubRepositoriesTool = tool(
+  async ({ per_page = 50 }: { per_page?: number }) => {
+    const token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN;
+    if (!token) {
+      return JSON.stringify({
+        error: "GITHUB_PERSONAL_ACCESS_TOKEN is not configured in backend/.env.",
+      });
+    }
+
+    try {
+      const response = await fetch(
+        `https://api.github.com/user/repos?per_page=${per_page}&sort=updated&affiliation=owner,collaborator`,
+        {
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "Personal-Assistant-Agent",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return JSON.stringify({
+          error: `GitHub API request failed with status ${response.status}: ${errorText}`,
+        });
+      }
+
+      const repos = await response.json();
+      if (!Array.isArray(repos)) {
+        return JSON.stringify({ error: "Unexpected response format from GitHub API." });
+      }
+
+      return JSON.stringify({
+        total: repos.length,
+        repositories: repos.map((r: any) => ({
+          name: r.name,
+          fullName: r.full_name,
+          owner: r.owner?.login,
+          private: r.private,
+          htmlUrl: r.html_url,
+          description: r.description || "No description provided",
+          language: r.language || "Unknown",
+          updatedAt: r.updated_at,
+          defaultBranch: r.default_branch,
+          stars: r.stargazers_count,
+          forks: r.forks_count,
+        })),
+      });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return JSON.stringify({
+        error: `Failed to fetch authenticated repositories: ${error.message}`,
+      });
+    }
+  },
+  {
+    name: "list_my_github_repositories",
+    description: "Fetches all personal and collaborated GitHub repositories belonging to the authenticated user using GITHUB_PERSONAL_ACCESS_TOKEN.",
+    schema: z.object({
+      per_page: z.number().optional().describe("Maximum number of repositories to return (default: 50)"),
+    }),
+  }
+);
+
+/**
  * Exported basic tools array
  */
-export const basicTools = [calculatorTool, getTimeTool];
+export const basicTools = [calculatorTool, getTimeTool, listMyGithubRepositoriesTool];

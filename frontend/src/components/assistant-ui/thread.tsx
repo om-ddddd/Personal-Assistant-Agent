@@ -62,14 +62,48 @@ export function Thread({
             {/* Prompt Starter Suggestions */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
               <ThreadPrimitive.Suggestion
-                prompt="Calculate (1548 * 372) / 12 and tell me the current time in Tokyo"
+                prompt="List all files and folders in the workspace root directory using the list_directory tool."
+                method="replace"
+                autoSend
+                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-cyan-300">
+                    Filesystem MCP Listing
+                  </span>
+                  <Code2 className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-snug">
+                  Inspect workspace structure using @modelcontextprotocol/server-filesystem.
+                </p>
+              </ThreadPrimitive.Suggestion>
+
+              <ThreadPrimitive.Suggestion
+                prompt="Read package.json from the project directory and explain its dependencies."
+                method="replace"
+                autoSend
+                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300">
+                    Read File via MCP
+                  </span>
+                  <Terminal className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-snug">
+                  Fetch and analyze file contents with read_text_file MCP tool.
+                </p>
+              </ThreadPrimitive.Suggestion>
+
+              <ThreadPrimitive.Suggestion
+                prompt="Calculate (1548 * 372) / 12 and tell me the current time in Tokyo and London"
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-300">
-                    Run Multi-Tool Math & Time
+                    Multi-Tool Math & Time
                   </span>
                   <Calculator className="w-4 h-4 text-zinc-500 group-hover:text-indigo-400" />
                 </div>
@@ -79,53 +113,19 @@ export function Thread({
               </ThreadPrimitive.Suggestion>
 
               <ThreadPrimitive.Suggestion
-                prompt="What is the current time in London (UTC) and New York (America/New_York)?"
+                prompt="Search for all typescript files matching '*.ts' in the project workspace using search_files tool."
                 method="replace"
                 autoSend
                 className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-200 group-hover:text-amber-300">
-                    Check World Time
+                    Search Files via MCP
                   </span>
-                  <Clock className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
+                  <Sparkles className="w-4 h-4 text-zinc-500 group-hover:text-amber-400" />
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-snug">
-                  Fetch accurate system timezone and date metrics.
-                </p>
-              </ThreadPrimitive.Suggestion>
-
-              <ThreadPrimitive.Suggestion
-                prompt="Show a sample TypeScript LangGraph StateGraph node for tool execution"
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300">
-                    LangGraph Tool Node
-                  </span>
-                  <GitBranch className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Explore how LangGraph tool nodes execute with checkpointing.
-                </p>
-              </ThreadPrimitive.Suggestion>
-
-              <ThreadPrimitive.Suggestion
-                prompt="Explain how the Tool Security Gate validates READ, WRITE, and DESTRUCTIVE actions"
-                method="replace"
-                autoSend
-                className="group p-3.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-zinc-200 group-hover:text-cyan-300">
-                    Tool Security Gate
-                  </span>
-                  <ShieldAlert className="w-4 h-4 text-zinc-500 group-hover:text-cyan-400" />
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Review permission enforcement for read, write, and destructive actions.
+                  Glob search project files using search_files MCP tool.
                 </p>
               </ThreadPrimitive.Suggestion>
             </div>
