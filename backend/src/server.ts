@@ -105,8 +105,8 @@ export function createServer() {
     }
 
     try {
-      for await (const token of streamAgentEvents(message, threadId)) {
-        res.write(`data: ${JSON.stringify({ text: token })}\n\n`);
+      for await (const event of streamAgentEvents(message, threadId)) {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
       res.write("data: [DONE]\n\n");
       res.end();
