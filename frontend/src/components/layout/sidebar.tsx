@@ -10,27 +10,37 @@ import {
   Cpu,
   ChevronLeft,
   ChevronRight,
-  FolderGit2,
-  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-export interface ChatSession {
-  id: string;
-  title: string;
-  updatedAt: string;
-  model: string;
-  messageCount: number;
-}
+import { ThreadSession } from "@/lib/agent-runtime";
 
 interface SidebarProps {
-  sessions: ChatSession[];
+  sessions: ThreadSession[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+}
+
+function formatRelativeTime(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (diffSeconds < 30) return "Just now";
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  } catch {
+    return "Recently";
+  }
 }
 
 export function Sidebar({
@@ -61,7 +71,7 @@ export function Sidebar({
                 Dev Assistant
               </h1>
               <p className="text-[10px] text-zinc-500 font-mono truncate">
-                LangGraph + MCP
+                LangGraph + Groq
               </p>
             </div>
           </div>
@@ -105,13 +115,14 @@ export function Sidebar({
       <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
         {isOpen && (
           <div className="px-2 py-1 text-[10px] font-mono uppercase text-zinc-500 tracking-wider">
-            Recent Sessions
+            Conversations ({sessions.length})
           </div>
         )}
 
         {sessions.length === 0 && isOpen && (
-          <div className="px-3 py-6 text-center text-xs text-zinc-500">
-            No previous sessions
+          <div className="px-3 py-8 text-center text-xs text-zinc-500 space-y-1">
+            <p>No active sessions.</p>
+            <p className="text-[11px] text-zinc-600">Click &apos;New Session&apos; above.</p>
           </div>
         )}
 
@@ -141,7 +152,8 @@ export function Sidebar({
                   <div className="flex-1 truncate min-w-0">
                     <p className="truncate text-xs">{session.title}</p>
                     <p className="text-[10px] text-zinc-500 font-mono">
-                      {session.updatedAt}
+                      {formatRelativeTime(session.updatedAt)}
+                      {session.messageCount > 0 && ` (${session.messageCount})`}
                     </p>
                   </div>
 
@@ -174,7 +186,7 @@ export function Sidebar({
                 <span>Runtime Engine</span>
               </div>
               <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-900/60">
-                Ready
+                LangGraph
               </span>
             </div>
 

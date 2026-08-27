@@ -3,13 +3,12 @@
 import React from "react";
 import {
   PanelLeft,
-  Activity,
   FolderGit2,
   Trash2,
-  HelpCircle,
-  Settings,
+  Server,
 } from "lucide-react";
 import { ModelSelector, ModelOption } from "@/components/assistant-ui/model-selector";
+import { cn } from "@/lib/utils";
 
 interface HeaderProps {
   sessionTitle: string;
@@ -18,6 +17,7 @@ interface HeaderProps {
   selectedModelId: string;
   onModelSelect: (model: ModelOption) => void;
   onClearThread?: () => void;
+  isBackendHealthy?: boolean | null;
 }
 
 export function Header({
@@ -27,6 +27,7 @@ export function Header({
   selectedModelId,
   onModelSelect,
   onClearThread,
+  isBackendHealthy,
 }: HeaderProps) {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between gap-4 select-none shrink-0 z-20">
@@ -60,10 +61,41 @@ export function Header({
           onModelSelect={onModelSelect}
         />
 
-        {/* Status indicator */}
-        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900/90 border border-zinc-800/90 text-xs">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[11px] text-zinc-400 font-mono">Backend Ready</span>
+        {/* Dynamic Backend Status indicator */}
+        <div
+          className={cn(
+            "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-colors",
+            isBackendHealthy === true
+              ? "bg-emerald-950/40 border-emerald-800/60 text-emerald-400"
+              : isBackendHealthy === false
+              ? "bg-rose-950/40 border-rose-800/60 text-rose-400"
+              : "bg-zinc-900/90 border-zinc-800 text-zinc-400"
+          )}
+          title={
+            isBackendHealthy === true
+              ? "Connected to Express + LangGraph backend (Port 5000)"
+              : isBackendHealthy === false
+              ? "Backend is offline. Ensure 'cd backend && npm run dev' is running"
+              : "Checking backend connectivity..."
+          }
+        >
+          <span
+            className={cn(
+              "w-2 h-2 rounded-full",
+              isBackendHealthy === true
+                ? "bg-emerald-400 animate-pulse"
+                : isBackendHealthy === false
+                ? "bg-rose-400"
+                : "bg-amber-400 animate-ping"
+            )}
+          />
+          <span className="text-[11px]">
+            {isBackendHealthy === true
+              ? "LangGraph Live"
+              : isBackendHealthy === false
+              ? "Backend Offline"
+              : "Connecting..."}
+          </span>
         </div>
 
         {/* Clear thread action */}

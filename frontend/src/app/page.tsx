@@ -1,45 +1,53 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { Sidebar, ChatSession } from "@/components/layout/sidebar";
+import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
 import { ToolCallData } from "@/components/assistant-ui/tool-call-preview";
-import { useAssistantMockRuntime } from "@/lib/mock-runtime";
-
-const INITIAL_SESSIONS: ChatSession[] = [
-  {
-    id: "session-1",
-    title: "Repository Analysis & Architecture",
-    updatedAt: "Just now",
-    model: "Llama 3.2 3B",
-    messageCount: 3,
-  },
-  {
-    id: "session-2",
-    title: "GitHub MCP Pull Request Review",
-    updatedAt: "2 hours ago",
-    model: "Claude 3.5 Sonnet",
-    messageCount: 7,
-  },
-  {
-    id: "session-3",
-    title: "Terminal Permission Gate Testing",
-    updatedAt: "Yesterday",
-    model: "Qwen 2.5 Coder 7B",
-    messageCount: 12,
-  },
-];
+import {
+  useBackendRuntime,
+  fetchThreads,
+  createThreadOnBackend,
+  deleteThreadOnBackend,
+  ThreadSession,
+} from "@/lib/agent-runtime";
 
 export default function Home() {
-  const [sessions, setSessions] = useState<ChatSession[]>(INITIAL_SESSIONS);
-  const [activeSessionId, setActiveSessionId] = useState<string>("session-1");
+  const [sessions, setSessions] = useState<ThreadSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [selectedModel, setSelectedModel] = useState<ModelOption>(AVAILABLE_MODELS[0]);
 
-  // Sample interactive tool calls for UI testing and verification
+  // Load threads from backend
+  const refreshSessions = useCallback(async () => {
+    const threadList = await fetchThreads();
+    if (threadList.length > 0) {
+      setSessions(threadList);
+      setActiveSessionId((current) => {
+        // If current active session is still in list, keep it
+        if (current && threadList.some((t) => t.id === current)) {
+          return current;
+        }
+        return threadList[0].id;
+      });
+    } else {
+      // Create initial real thread if none exist
+      const newThread = await createThreadOnBackend();
+      if (newThread) {
+        setSessions([newThread]);
+        setActiveSessionId(newThread.id);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
+  // Sample interactive tool calls for UI preview
   const [sampleToolCalls, setSampleToolCalls] = useState<ToolCallData[]>([
     {
       id: "tool-1",
@@ -54,35 +62,43 @@ export default function Home() {
     },
   ]);
 
-  // Assistant local mock runtime
-  const { runtime, setModelName } = useAssistantMockRuntime(selectedModel.name);
+  // Real LangGraph Backend Runtime wired to the active session thread ID
+  const { runtime, isBackendHealthy } = useBackendRuntime({
+    threadId: activeSessionId || "default-session",
+    onStreamComplete: refreshSessions,
+  });
 
-  const activeSession =
-    sessions.find((s) => s.id === activeSessionId) || sessions[0];
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   const handleModelSelect = (model: ModelOption) => {
     setSelectedModel(model);
-    setModelName(model.name);
   };
 
-  const handleNewSession = () => {
-    const newId = `session-${Date.now()}`;
-    const newSession: ChatSession = {
-      id: newId,
-      title: "New Conversation",
-      updatedAt: "Just now",
-      model: selectedModel.name,
-      messageCount: 0,
-    };
-    setSessions([newSession, ...sessions]);
-    setActiveSessionId(newId);
+  const handleNewSession = async () => {
+    const newThread = await createThreadOnBackend();
+    if (newThread) {
+      setSessions((prev) => [newThread, ...prev]);
+      setActiveSessionId(newThread.id);
+    }
   };
 
-  const handleDeleteSession = (id: string) => {
-    const remaining = sessions.filter((s) => s.id !== id);
-    setSessions(remaining);
-    if (activeSessionId === id && remaining.length > 0) {
-      setActiveSessionId(remaining[0].id);
+  const handleDeleteSession = async (id: string) => {
+    const success = await deleteThreadOnBackend(id);
+    if (success) {
+      const remaining = sessions.filter((s) => s.id !== id);
+      setSessions(remaining);
+      if (activeSessionId === id) {
+        if (remaining.length > 0) {
+          setActiveSessionId(remaining[0].id);
+        } else {
+          // If all sessions deleted, spawn a new fresh session
+          const newThread = await createThreadOnBackend();
+          if (newThread) {
+            setSessions([newThread]);
+            setActiveSessionId(newThread.id);
+          }
+        }
+      }
     }
   };
 
@@ -137,12 +153,13 @@ export default function Home() {
             onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             selectedModelId={selectedModel.id}
             onModelSelect={handleModelSelect}
+            isBackendHealthy={isBackendHealthy}
           />
 
           {/* Assistant Thread */}
           <main className="flex-1 overflow-hidden relative">
             <Thread
-              activeModelName={selectedModel.name}
+              activeModelName="Groq (openai/gpt-oss-120b)"
               sampleToolCalls={sampleToolCalls}
               onApproveTool={handleApproveTool}
               onRejectTool={handleRejectTool}
