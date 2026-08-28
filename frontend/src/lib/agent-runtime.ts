@@ -2,6 +2,7 @@
 
 import { useLocalRuntime, type ChatModelAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { getStoredAuthToken } from "./user-auth";
 
 export type ToolRiskLevel = "READ" | "WRITE" | "DESTRUCTIVE";
 
@@ -46,6 +47,7 @@ export interface ThreadInterruptState {
 
 export interface ThreadSession {
   id: string;
+  userId?: string | null;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -69,14 +71,25 @@ interface BackendRuntimeOptions {
 const DEFAULT_BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const token = getStoredAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /**
- * Fetch all active thread sessions from the backend
+ * Fetch all active thread sessions from the backend scoped to current user
  */
 export async function fetchThreads(
   backendUrl: string = DEFAULT_BACKEND_URL
 ): Promise<ThreadSession[]> {
   try {
-    const res = await fetch(`${backendUrl}/api/threads`, { method: "GET" });
+    const res = await fetch(`${backendUrl}/api/threads`, {
+      method: "GET",
+      headers: {
+        ...getAuthHeaders(),
+      },
+    });
     if (!res.ok) return [];
     const data = await res.json();
     return data.threads || [];
@@ -96,7 +109,12 @@ export async function fetchThreadHistory(
   try {
     const res = await fetch(
       `${backendUrl}/api/threads/${encodeURIComponent(threadId)}/history`,
-      { method: "GET" }
+      {
+        method: "GET",
+        headers: {
+          ...getAuthHeaders(),
+        },
+      }
     );
     if (!res.ok) return [];
     const data = await res.json();
@@ -117,7 +135,10 @@ export async function createThreadOnBackend(
   try {
     const res = await fetch(`${backendUrl}/api/threads`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+      },
       body: JSON.stringify({ title }),
     });
     if (!res.ok) return null;
@@ -139,6 +160,9 @@ export async function deleteThreadOnBackend(
   try {
     const res = await fetch(`${backendUrl}/api/threads/${encodeURIComponent(threadId)}`, {
       method: "DELETE",
+      headers: {
+        ...getAuthHeaders(),
+      },
     });
     return res.ok;
   } catch (err) {
@@ -156,6 +180,9 @@ export async function fetchPermissionRegistry(
   try {
     const res = await fetch(`${backendUrl}/api/permissions/registry`, {
       method: "GET",
+      headers: {
+        ...getAuthHeaders(),
+      },
     });
     if (!res.ok) return null;
     return await res.json();
@@ -269,6 +296,7 @@ export function createBackendChatModel(
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({
             message: userText,

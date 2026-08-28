@@ -320,44 +320,68 @@ export function createServer() {
     }
   });
 
+  // Helper to extract authenticated userId from Authorization header
+  function extractUserIdFromReq(req: Request): string | null {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) return null;
+      const decoded = verifyAuthToken(authHeader);
+      return decoded?.userId || null;
+    } catch {
+      return null;
+    }
+  }
+
   // =========================================================================
   //                          THREAD ENDPOINTS
   // =========================================================================
 
-  // List all distinct thread sessions
-  app.get("/api/threads", async (_req: Request, res: Response) => {
-    const threads = await listThreads();
+  // List all distinct thread sessions scoped to the requesting user
+  app.get("/api/threads", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    const threads = await listThreads(userId);
     return res.json({ threads });
   });
 
   // Get specific thread details (including short-term memory summary)
   app.get("/api/threads/:id", async (req: Request, res: Response) => {
     const id = String(req.params.id);
-    const thread = await getThread(id);
+    const userId = extractUserIdFromReq(req);
+    const thread = await getThread(id, userId);
     if (!thread) {
-      return res.status(404).json({ error: `Thread "${id}" not found.` });
+      return res.status(404).json({ error: `Thread "${id}" not found or unauthorized.` });
     }
     return res.json({ thread });
   });
 
-  // Create a new distinct thread session (Backend-generated UUID)
+  // Create a new distinct thread session (Backend-generated UUID) associated with active user
   app.post("/api/threads", (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
     const { title } = req.body || {};
-    const thread = createThread(title || "New Conversation");
+    const thread = createThread(title || "New Conversation", userId);
     return res.status(201).json({ thread });
   });
 
-  // Delete a thread session
+  // Delete a thread session, ensuring only authorized user can delete
   app.delete("/api/threads/:id", async (req: Request, res: Response) => {
     const id = String(req.params.id);
-    const deleted = await deleteThread(id);
-    return res.json({ success: deleted, id });
+    const userId = extractUserIdFromReq(req);
+    const deleted = await deleteThread(id, userId);
+    if (!deleted) {
+      return res.status(403).json({ error: "Cannot delete thread or unauthorized." });
+    }
+    return res.json({ success: true, id });
   });
 
-  // Retrieve message history for a specific thread
+  // Retrieve message history for a specific thread, ensuring ownership
   app.get("/api/threads/:id/history", async (req: Request, res: Response) => {
     try {
       const id = String(req.params.id);
+      const userId = extractUserIdFromReq(req);
+      const thread = await getThread(id, userId);
+      if (!thread) {
+        return res.status(404).json({ error: "Thread not found or unauthorized." });
+      }
       const history = await getThreadHistory(id);
       return res.json({ threadId: id, messages: history });
     } catch (err: unknown) {
@@ -591,13 +615,14 @@ export function createServer() {
   // Non-streaming chat invocation endpoint
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
+      const userId = extractUserIdFromReq(req);
       const { message, threadId = "default-session" } = req.body;
 
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Missing or invalid 'message' field in request body." });
       }
 
-      const result = await invokeAgent(message, threadId);
+      const result = await invokeAgent(message, threadId, userId);
 
       // Check if the graph was interrupted for HITL confirmation
       const interruptState = await getThreadInterruptState(threadId);
@@ -647,6 +672,7 @@ export function createServer() {
 
   // Real-time SSE token streaming endpoint
   app.post("/api/chat/stream", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
     const { message, threadId = "default-session" } = req.body;
 
     if (!message || typeof message !== "string") {
@@ -661,7 +687,7 @@ export function createServer() {
     }
 
     try {
-      for await (const event of streamAgentEvents(message, threadId)) {
+      for await (const event of streamAgentEvents(message, threadId, userId)) {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
 

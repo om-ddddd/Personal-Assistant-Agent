@@ -76,6 +76,7 @@ Formatting Guidelines:
 
 export interface ThreadMetadata {
   id: string;
+  userId?: string | null;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -89,25 +90,40 @@ export interface ThreadMetadata {
 const threadStore = new Map<string, ThreadMetadata>();
 
 /**
- * List all registered threads (sorted newest first)
+ * List registered threads scoped to the requesting user (sorted newest first).
+ * If userId is provided, only returns threads belonging to that user.
+ * If userId is null/undefined, returns guest/unauthenticated threads.
  */
-export async function listThreads(): Promise<ThreadMetadata[]> {
+export async function listThreads(userId?: string | null): Promise<ThreadMetadata[]> {
   const merged = new Map<string, ThreadMetadata>();
+  const targetUserId = userId || null;
 
-  // 1. Load active in-memory threads
+  // 1. Load active in-memory threads matching user scope
   for (const t of threadStore.values()) {
-    merged.set(t.id, t);
+    const threadOwner = t.userId || null;
+    if (targetUserId) {
+      if (threadOwner === targetUserId) {
+        merged.set(t.id, t);
+      }
+    } else {
+      // Guest / unauthenticated scope: only show threads without an assigned user
+      if (!threadOwner || threadOwner === "guest") {
+        merged.set(t.id, t);
+      }
+    }
   }
 
   // 2. Merge with database threads
   if (isDatabaseConnected()) {
     try {
       const dbThreads = await prisma.thread.findMany({
+        where: targetUserId ? { userId: targetUserId } : { userId: null },
         orderBy: { updatedAt: "desc" },
       });
       for (const t of dbThreads) {
         merged.set(t.id, {
           id: t.id,
+          userId: t.userId || null,
           title: t.title,
           createdAt: t.createdAt.toISOString(),
           updatedAt: t.updatedAt.toISOString(),
@@ -126,13 +142,19 @@ export async function listThreads(): Promise<ThreadMetadata[]> {
 }
 
 /**
- * Create a new distinct thread session with a unique UUID
+ * Create a new distinct thread session with a unique UUID associated with a user.
  */
-export function createThread(initialTitle: string = "New Conversation"): ThreadMetadata {
+export function createThread(
+  initialTitle: string = "New Conversation",
+  userId?: string | null
+): ThreadMetadata {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const ownerId = userId || null;
+
   const thread: ThreadMetadata = {
     id,
+    userId: ownerId,
     title: initialTitle,
     createdAt: now,
     updatedAt: now,
@@ -145,6 +167,7 @@ export function createThread(initialTitle: string = "New Conversation"): ThreadM
       .create({
         data: {
           id,
+          userId: ownerId,
           title: initialTitle,
           messageCount: 0,
         },
@@ -156,15 +179,18 @@ export function createThread(initialTitle: string = "New Conversation"): ThreadM
 }
 
 /**
- * Retrieve metadata for a single thread
+ * Retrieve metadata for a single thread, checking user ownership if userId provided.
  */
-export async function getThread(id: string): Promise<ThreadMetadata | undefined> {
+export async function getThread(id: string, userId?: string | null): Promise<ThreadMetadata | undefined> {
+  let thread: ThreadMetadata | undefined;
+
   if (isDatabaseConnected()) {
     try {
       const dbThread = await prisma.thread.findUnique({ where: { id } });
       if (dbThread) {
-        return {
+        thread = {
           id: dbThread.id,
+          userId: dbThread.userId || null,
           title: dbThread.title,
           createdAt: dbThread.createdAt.toISOString(),
           updatedAt: dbThread.updatedAt.toISOString(),
@@ -176,13 +202,34 @@ export async function getThread(id: string): Promise<ThreadMetadata | undefined>
       // fallback
     }
   }
-  return threadStore.get(id);
+
+  if (!thread) {
+    thread = threadStore.get(id);
+  }
+
+  if (thread && userId !== undefined) {
+    const threadOwner = thread.userId || null;
+    const requester = userId || null;
+    if (threadOwner && requester && threadOwner !== requester) {
+      return undefined; // Not authorized
+    }
+  }
+
+  return thread;
 }
 
 /**
- * Delete a thread session from the registry and database
+ * Delete a thread session from the registry and database, verifying user ownership.
  */
-export async function deleteThread(id: string): Promise<boolean> {
+export async function deleteThread(id: string, userId?: string | null): Promise<boolean> {
+  const existing = await getThread(id);
+  if (existing && userId !== undefined && existing.userId) {
+    const requester = userId || null;
+    if (existing.userId !== requester) {
+      return false; // Cannot delete another user's thread
+    }
+  }
+
   if (isDatabaseConnected()) {
     try {
       await prisma.thread.delete({ where: { id } });
@@ -196,9 +243,10 @@ export async function deleteThread(id: string): Promise<boolean> {
 /**
  * Touch a thread to increment message count, refresh timestamp, and generate title from first prompt
  */
-export function touchThread(id: string, prompt?: string): ThreadMetadata {
+export function touchThread(id: string, prompt?: string, userId?: string | null): ThreadMetadata {
   let thread = threadStore.get(id);
   const now = new Date().toISOString();
+  const ownerId = userId || null;
 
   if (!thread) {
     let title = "New Conversation";
@@ -208,6 +256,7 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
     }
     thread = {
       id,
+      userId: ownerId,
       title,
       createdAt: now,
       updatedAt: now,
@@ -221,6 +270,7 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
           where: { id },
           create: {
             id,
+            userId: ownerId,
             title,
             messageCount: 1,
           },
@@ -237,6 +287,9 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
 
   thread.messageCount += 1;
   thread.updatedAt = now;
+  if (ownerId && !thread.userId) {
+    thread.userId = ownerId;
+  }
 
   if (thread.title === "New Conversation" && prompt && prompt.trim()) {
     const clean = prompt.trim();
@@ -251,10 +304,12 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
         where: { id },
         create: {
           id,
+          userId: thread.userId || null,
           title: thread.title,
           messageCount: thread.messageCount,
         },
         update: {
+          userId: thread.userId || null,
           title: thread.title,
           updatedAt: new Date(),
           messageCount: thread.messageCount,
@@ -812,7 +867,11 @@ export async function getThreadHistory(threadId: string) {
 /**
  * Helper to invoke the agent for a given thread
  */
-export async function invokeAgent(prompt: string, threadId: string = "default-thread") {
+export async function invokeAgent(
+  prompt: string,
+  threadId: string = "default-thread",
+  userId?: string | null
+) {
   const agentInstance = await getCompiledAgent();
   const config = {
     configurable: {
@@ -844,7 +903,7 @@ export async function invokeAgent(prompt: string, threadId: string = "default-th
     }
   }
 
-  touchThread(threadId, prompt);
+  touchThread(threadId, prompt, userId);
 
   const result = await agentInstance.invoke(
     {
@@ -908,7 +967,11 @@ export async function resumeAfterConfirmation(
  * Helper to stream raw token chunks, tool events, and HITL confirmation events
  * from LangGraph using streamEvents.
  */
-export async function* streamAgentEvents(prompt: string, threadId: string = "default-thread") {
+export async function* streamAgentEvents(
+  prompt: string,
+  threadId: string = "default-thread",
+  userId?: string | null
+) {
   const agentInstance = await getCompiledAgent();
   const config = {
     configurable: {
@@ -940,7 +1003,7 @@ export async function* streamAgentEvents(prompt: string, threadId: string = "def
     }
   }
 
-  touchThread(threadId, prompt);
+  touchThread(threadId, prompt, userId);
 
   const eventStream = agentInstance.streamEvents(
     {

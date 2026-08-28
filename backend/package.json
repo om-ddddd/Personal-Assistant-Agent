@@ -15,7 +15,8 @@
     "test:terminal": "npx tsx src/test-terminal-tool.ts",
     "test:github-oauth": "npx tsx src/test-github-oauth.ts",
     "test:github-capabilities": "npx tsx src/test-github-capabilities.ts",
-    "test:user-auth": "npx tsx src/test-user-auth.ts"
+    "test:user-auth": "npx tsx src/test-user-auth.ts",
+    "test:user-isolation": "npx tsx src/test-user-conversations-isolation.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.12",

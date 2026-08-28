@@ -266,6 +266,11 @@ export default function Home() {
   const handleLogout = async () => {
     await apiLogout();
     setCurrentUser(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("last_active_thread_id");
+    }
+    setActiveSessionId("");
+    setSessions([]);
   };
 
   // Check URL params for OAuth callback results
@@ -335,6 +340,11 @@ export default function Home() {
       setActiveSessionId("");
     }
   }, [refreshPendingCount]);
+
+  // Re-fetch threads whenever user authentication state changes (login / logout)
+  useEffect(() => {
+    refreshSessions();
+  }, [currentUser, refreshSessions]);
 
   useEffect(() => {
     let isMounted = true;
