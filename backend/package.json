@@ -10,7 +10,8 @@
     "typecheck": "npx tsc --noEmit",
     "test:agent": "npx tsx src/test-agent.ts",
     "test:permissions": "npx tsx src/test-permissions.ts",
-    "test:memory": "npx tsx src/test-memory-persistence.ts"
+    "test:memory": "npx tsx src/test-memory-persistence.ts",
+    "test:long-term": "npx tsx src/test-long-term-memory.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.12",
@@ -24,6 +25,7 @@
     "@langchain/openai": "^0.4.4",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@prisma/client": "^6.4.1",
+    "@xenova/transformers": "^2.17.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

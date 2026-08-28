@@ -13,6 +13,7 @@ import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from
 import { model } from "./models.js";
 import { basicTools } from "./tools/basic.js";
 import { googleWorkspaceTools } from "./tools/google-workspace.js";
+import { memoryTools } from "./tools/memory-tools.js";
 import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
@@ -28,6 +29,13 @@ import {
   buildPromptWithMemoryContext,
   SHORT_TERM_MEMORY_CONFIG,
 } from "./memory/short-term.js";
+
+// Long-term memory imports (pgvector semantic search)
+import {
+  searchRelevantMemories,
+  formatLongTermMemoriesForPrompt,
+  initPgVectorSchema,
+} from "./memory/long-term.js";
 
 // Permission system imports
 import { ToolRiskLevel, ConfirmationStatus } from "./permissions/types.js";
@@ -53,6 +61,11 @@ When the user asks to inspect, read, search, or list files in the project or wor
 When the user asks to list, inspect, or describe their own GitHub repositories, ALWAYS use the list_my_github_repositories tool.
 When the user asks about calendar events, meetings, scheduling, or emails, ALWAYS use the appropriate Google Workspace tools (list_calendar_events, create_calendar_event, list_emails, read_email, send_email).
 
+Long-Term Memory Rules:
+- When storing user facts or preferences with the save_memory tool, do so silently in the background and only store exact, verified facts provided by the user.
+- Never make robotic meta-announcements about internal memory systems (e.g. do NOT say "I have saved this in my long-term memory"). Respond naturally and conversationally to the user in context.
+- Only discuss or explain stored long-term memories if the user explicitly asks you to recall or list what you remember.
+
 Formatting Guidelines:
 - When presenting tabular data, ensure every Markdown table row is on its own separate line with standard newlines (never combine multiple rows into a single line).
 - Alternatively, format lists of repositories, files, events, or emails using clean, structured Markdown bullet points.
@@ -77,27 +90,35 @@ const threadStore = new Map<string, ThreadMetadata>();
  * List all registered threads (sorted newest first)
  */
 export async function listThreads(): Promise<ThreadMetadata[]> {
+  const merged = new Map<string, ThreadMetadata>();
+
+  // 1. Load active in-memory threads
+  for (const t of threadStore.values()) {
+    merged.set(t.id, t);
+  }
+
+  // 2. Merge with database threads
   if (isDatabaseConnected()) {
     try {
       const dbThreads = await prisma.thread.findMany({
         orderBy: { updatedAt: "desc" },
       });
-      if (dbThreads.length > 0) {
-        return dbThreads.map((t) => ({
+      for (const t of dbThreads) {
+        merged.set(t.id, {
           id: t.id,
           title: t.title,
           createdAt: t.createdAt.toISOString(),
           updatedAt: t.updatedAt.toISOString(),
           messageCount: t.messageCount,
           summary: t.summary || undefined,
-        }));
+        });
       }
     } catch {
       // fallback to memory
     }
   }
 
-  return Array.from(threadStore.values()).sort(
+  return Array.from(merged.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
 }
@@ -278,7 +299,7 @@ function formatToolForModel(tool: any) {
 export const MAX_AGENT_LOOPS = 10;
 
 /**
- * Custom State Annotation with messages, progressive summary, and loop iteration guard.
+ * Custom State Annotation with messages, short-term summary, long-term cross-thread memories, and loop guard.
  */
 export const AgentStateAnnotation = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -289,6 +310,10 @@ export const AgentStateAnnotation = Annotation.Root({
     reducer: (x, y) => (y !== undefined && y !== "" ? y : (x || "")),
     default: () => "",
   }),
+  longTermMemories: Annotation<string>({
+    reducer: (x, y) => (y !== undefined ? y : (x || "")),
+    default: () => "",
+  }),
   loopCount: Annotation<number>({
     reducer: (x, y) => (typeof y === "number" ? y : (x || 0)),
     default: () => 0,
@@ -296,8 +321,8 @@ export const AgentStateAnnotation = Annotation.Root({
 });
 
 /**
- * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution
- * and short-term memory management (progressive summarization + sliding-window trimming).
+ * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution,
+ * short-term memory (trimming & progressive summarization), and long-term memory (pgvector).
  */
 export async function getCompiledAgent() {
   if (compiledAgentInstance) {
@@ -306,7 +331,7 @@ export async function getCompiledAgent() {
 
   // Load MCP tools from Filesystem MCP / GitHub MCP servers
   const mcpTools = await initializeMcpClient();
-  activeToolsList = [...basicTools, ...googleWorkspaceTools, ...mcpTools];
+  activeToolsList = [...basicTools, ...memoryTools, ...googleWorkspaceTools, ...mcpTools];
 
   // Register all tools in the permission registry (MCP tools default to WRITE if unknown)
   registerTools(
@@ -316,7 +341,7 @@ export async function getCompiledAgent() {
   );
 
   console.log(
-    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (3 basic + 6 Google Workspace + ${activeToolsList.length - 9} MCP)...`
+    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (3 basic + 3 memory + 6 Google Workspace + ${activeToolsList.length - 12} MCP)...`
   );
 
   const formattedTools = activeToolsList.map(formatToolForModel);
@@ -327,15 +352,15 @@ export async function getCompiledAgent() {
   const toolNode = new ToolNode(activeToolsList);
 
   /**
-   * Dedicated Short-Term Memory Node:
-   * 1. Inspects message count against SUMMARIZATION_THRESHOLD.
-   * 2. Progressively summarizes older turns into an evolving summary string.
-   * 3. Synchronizes updated summary with database and state.
+   * Dedicated Memory Node:
+   * 1. Short-Term Memory: Inspects turn count and computes progressive summary.
+   * 2. Long-Term Memory: Uses pgvector cosine similarity to recall relevant cross-thread memories.
    */
   async function memoryNode(state: typeof AgentStateAnnotation.State, config?: any) {
     const threadId = config?.configurable?.thread_id;
     let currentSummary = state.summary || "";
 
+    // 1. Short-Term Progressive Summarization
     if (state.messages.length >= SHORT_TERM_MEMORY_CONFIG.SUMMARIZATION_THRESHOLD) {
       currentSummary = await summarizeConversationHistory(state.messages, currentSummary);
       if (threadId && currentSummary) {
@@ -355,7 +380,26 @@ export async function getCompiledAgent() {
       }
     }
 
-    return { summary: currentSummary };
+    // 2. Long-Term Memory: Semantic Vector Search for relevant user facts
+    let longTermContext = state.longTermMemories || "";
+    const lastHuman = state.messages
+      .filter((m: any) => m instanceof HumanMessage || m.getType?.() === "human" || (m as any)._getType?.() === "human")
+      .pop();
+
+    if (lastHuman) {
+      const userPrompt = typeof lastHuman.content === "string" ? lastHuman.content : JSON.stringify(lastHuman.content);
+      try {
+        const relevantMemories = await searchRelevantMemories(userPrompt, 4, 0.35);
+        longTermContext = formatLongTermMemoriesForPrompt(relevantMemories);
+      } catch (err) {
+        console.warn("[Agent] Failed to retrieve long-term memories:", err);
+      }
+    }
+
+    return {
+      summary: currentSummary,
+      longTermMemories: longTermContext,
+    };
   }
 
   async function callModel(state: typeof AgentStateAnnotation.State) {
@@ -375,14 +419,18 @@ export async function getCompiledAgent() {
     // Short-Term Memory: Prompt Trimming (Sliding Window without breaking tool pairs)
     const trimmedMessages = await trimConversationMessages(state.messages);
 
-    // Inject running summary into System Prompt for the LLM
-    const systemPromptWithSummary = buildPromptWithMemoryContext(
-      SYSTEM_PROMPT,
+    // Assemble System Prompt: Base System Prompt + Long-Term Memories + Short-Term Summary
+    let fullSystemPrompt = SYSTEM_PROMPT;
+    if (state.longTermMemories) {
+      fullSystemPrompt += state.longTermMemories;
+    }
+    fullSystemPrompt = buildPromptWithMemoryContext(
+      fullSystemPrompt,
       state.summary || ""
     );
 
     const messagesWithSystem: BaseMessage[] = [
-      new SystemMessage(systemPromptWithSummary),
+      new SystemMessage(fullSystemPrompt),
       ...trimmedMessages,
     ];
 

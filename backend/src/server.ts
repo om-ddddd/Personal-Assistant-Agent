@@ -31,6 +31,14 @@ import {
   cleanupExpiredConfirmations,
 } from "./permissions/manager.js";
 
+// Long-Term Memory imports
+import {
+  saveLongTermMemory,
+  searchRelevantMemories,
+  listAllMemories,
+  deleteMemory as deleteLongTermMemory,
+} from "./memory/long-term.js";
+
 dotenv.config();
 
 export function createServer() {
@@ -338,6 +346,64 @@ export function createServer() {
     } catch (err: unknown) {
       const error = err as Error;
       return res.status(500).json({ error: error.message || "Failed to fetch thread history" });
+    }
+  });
+
+  // =========================================================================
+  //                      LONG-TERM MEMORY (PGVECTOR) ENDPOINTS
+  // =========================================================================
+
+  // List all durable memories
+  app.get("/api/memories", async (req: Request, res: Response) => {
+    try {
+      const userId = String(req.query.userId || "default_user");
+      const memories = await listAllMemories(userId);
+      return res.json({ memories });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to list memories" });
+    }
+  });
+
+  // Save a new long-term memory
+  app.post("/api/memories", async (req: Request, res: Response) => {
+    try {
+      const { content, category = "preference", userId = "default_user" } = req.body || {};
+      if (!content || typeof content !== "string") {
+        return res.status(400).json({ error: "Missing or invalid 'content' field." });
+      }
+      const memory = await saveLongTermMemory(content, category, userId);
+      return res.status(201).json({ memory });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to save memory" });
+    }
+  });
+
+  // Delete a specific memory
+  app.delete("/api/memories/:id", async (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.id);
+      const deleted = await deleteLongTermMemory(id);
+      return res.json({ success: deleted, id });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to delete memory" });
+    }
+  });
+
+  // Semantic similarity search across memories
+  app.post("/api/memories/search", async (req: Request, res: Response) => {
+    try {
+      const { query, limit = 5, threshold = 0.35, userId = "default_user" } = req.body || {};
+      if (!query || typeof query !== "string") {
+        return res.status(400).json({ error: "Missing or invalid 'query' field." });
+      }
+      const results = await searchRelevantMemories(query, Number(limit), Number(threshold), userId);
+      return res.json({ query, results });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to search memories" });
     }
   });
 

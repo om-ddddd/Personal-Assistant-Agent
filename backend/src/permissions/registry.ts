@@ -22,10 +22,15 @@ const registry = new Map<string, ToolPermissionEntry>();
  * MCP tools are registered dynamically at runtime via registerTool().
  */
 const DEFAULT_CLASSIFICATIONS: Record<string, ToolRiskLevel> = {
-  // Basic tools
+  // Basic Built-in Tools
   calculator: ToolRiskLevel.READ,
   get_time: ToolRiskLevel.READ,
   list_my_github_repositories: ToolRiskLevel.READ,
+
+  // Long-Term Memory Tools
+  recall_memories: ToolRiskLevel.READ,
+  save_memory: ToolRiskLevel.READ,
+  forget_memory: ToolRiskLevel.READ,
 
   // Google Calendar
   list_calendar_events: ToolRiskLevel.READ,
