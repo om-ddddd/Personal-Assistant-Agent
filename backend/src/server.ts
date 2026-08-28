@@ -56,6 +56,17 @@ import {
   getUserById,
 } from "./auth/user-auth.js";
 
+// Background Job imports (Redis 8 + BullMQ)
+import {
+  enqueueAssistantJob,
+  getJobDetails,
+  listUserJobs,
+  cancelAssistantJob,
+} from "./jobs/queue.js";
+import { startJobWorker, stopJobWorker, processJob } from "./jobs/worker.js";
+import { isRedisConnected, checkRedisHealth } from "./jobs/redis.js";
+import { JobPayload } from "./jobs/types.js";
+
 dotenv.config();
 
 export function createServer() {
@@ -735,14 +746,97 @@ export function createServer() {
     }
   });
 
+  // =========================================================================
+  //                       BACKGROUND JOBS ENDPOINTS
+  // =========================================================================
+
+  // Enqueue a new background job (user-scoped)
+  app.post("/api/jobs", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const payload: JobPayload = req.body;
+      if (!payload || !payload.type) {
+        return res.status(400).json({ error: "Missing required 'type' in job payload." });
+      }
+
+      const jobRecord = await enqueueAssistantJob(payload, userId);
+
+      // In fallback mode when Redis is not running, process job asynchronously
+      if (!isRedisConnected()) {
+        setTimeout(() => {
+          processJob(jobRecord.id, payload).catch((err) => {
+            console.error(`[BackgroundJob] Error executing fallback job ${jobRecord.id}:`, err);
+          });
+        }, 100);
+      }
+
+      return res.status(201).json(jobRecord);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to enqueue background job." });
+    }
+  });
+
+  // List background jobs for active user
+  app.get("/api/jobs", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const statusFilter = req.query.status ? (String(req.query.status) as any) : undefined;
+      const jobs = await listUserJobs(userId, statusFilter);
+      return res.json({ jobs, total: jobs.length });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to list jobs." });
+    }
+  });
+
+  // Check Redis connection health
+  app.get("/api/jobs/health", async (_req: Request, res: Response) => {
+    const health = await checkRedisHealth();
+    return res.json(health);
+  });
+
+  // Get specific job details
+  app.get("/api/jobs/:id", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const jobId = String(req.params.id);
+      const job = await getJobDetails(jobId, userId);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found or access denied." });
+      }
+      return res.json(job);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to fetch job details." });
+    }
+  });
+
+  // Cancel an active background job
+  app.post("/api/jobs/:id/cancel", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const jobId = String(req.params.id);
+      const cancelled = await cancelAssistantJob(jobId, userId);
+      if (!cancelled) {
+        return res.status(400).json({ error: "Cannot cancel completed, failed, or non-existent job." });
+      }
+      return res.json({ success: true, message: "Job cancelled successfully." });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to cancel job." });
+    }
+  });
+
+  // Start background job worker
+  startJobWorker();
+
   // Handle process cleanup
   process.on("SIGINT", async () => {
     await closeMcpClient();
+    await stopJobWorker();
     process.exit(0);
   });
 
   process.on("SIGTERM", async () => {
     await closeMcpClient();
+    await stopJobWorker();
     process.exit(0);
   });
 

@@ -28,3 +28,18 @@ yarn-error.log*
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Test files and coverage
+test-*.ts
+test-*.js
+*.test.ts
+*.test.tsx
+*.test.js
+*.test.jsx
+*.spec.ts
+*.spec.tsx
+*.spec.js
+*.spec.jsx
+test/
+tests/
+coverage/

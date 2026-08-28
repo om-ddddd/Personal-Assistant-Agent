@@ -8,6 +8,8 @@ import { Thread } from "@/components/assistant-ui/thread";
 import { PermissionManagerModal } from "@/components/permissions/permission-manager-modal";
 import { IntegrationsModal } from "@/components/auth/integrations-modal";
 import { UserAuthModal } from "@/components/auth/user-auth-modal";
+import { JobsDrawer } from "@/components/jobs/jobs-drawer";
+import { fetchUserJobs } from "@/lib/jobs-client";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
 import { cn } from "@/lib/utils";
 import {
@@ -247,6 +249,8 @@ export default function Home() {
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
   const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isJobsDrawerOpen, setIsJobsDrawerOpen] = useState(false);
+  const [activeJobsCount, setActiveJobsCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [pendingConfirmationsCount, setPendingConfirmationsCount] = useState(0);
   const [authNotification, setAuthNotification] = useState<{
@@ -320,11 +324,23 @@ export default function Home() {
     }
   }, []);
 
+  // Poll active background jobs count
+  const refreshJobsCount = useCallback(async () => {
+    try {
+      const jobs = await fetchUserJobs();
+      const count = jobs.filter((j) => j.status === "ACTIVE" || j.status === "PENDING").length;
+      setActiveJobsCount(count);
+    } catch {
+      // Ignore poll error
+    }
+  }, []);
+
   // Load threads from backend
   const refreshSessions = useCallback(async () => {
     const threadList = await fetchThreads();
     setSessions(threadList);
     refreshPendingCount();
+    refreshJobsCount();
     if (threadList.length > 0) {
       setActiveSessionId((current) => {
         if (current && threadList.some((t) => t.id === current)) {
@@ -339,7 +355,7 @@ export default function Home() {
     } else {
       setActiveSessionId("");
     }
-  }, [refreshPendingCount]);
+  }, [refreshPendingCount, refreshJobsCount]);
 
   // Re-fetch threads whenever user authentication state changes (login / logout)
   useEffect(() => {
@@ -352,6 +368,7 @@ export default function Home() {
       const [threadList] = await Promise.all([
         fetchThreads(),
         refreshPendingCount(),
+        refreshJobsCount(),
       ]);
       if (!isMounted) return;
       setSessions(threadList);
@@ -370,13 +387,16 @@ export default function Home() {
 
     init();
 
-    // Periodic poll for pending approvals count
-    const interval = setInterval(refreshPendingCount, 5000);
+    // Periodic poll for pending approvals and background jobs count
+    const interval = setInterval(() => {
+      refreshPendingCount();
+      refreshJobsCount();
+    }, 5000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [refreshPendingCount]);
+  }, [refreshPendingCount, refreshJobsCount]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -463,6 +483,8 @@ export default function Home() {
           onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
           pendingConfirmationsCount={pendingConfirmationsCount}
           onOpenIntegrations={() => setIsIntegrationsOpen(true)}
+          onOpenJobsDrawer={() => setIsJobsDrawerOpen(true)}
+          activeJobsCount={activeJobsCount}
           currentUser={currentUser}
           onOpenAuth={() => setIsAuthModalOpen(true)}
           onLogout={handleLogout}
@@ -519,6 +541,15 @@ export default function Home() {
           )}
         </main>
       </div>
+
+      {/* Background Jobs Task Drawer */}
+      <JobsDrawer
+        isOpen={isJobsDrawerOpen}
+        onClose={() => {
+          setIsJobsDrawerOpen(false);
+          refreshJobsCount();
+        }}
+      />
 
       {/* Tool Permission Manager Modal */}
       <PermissionManagerModal

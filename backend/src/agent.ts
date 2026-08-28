@@ -14,6 +14,11 @@ import { model } from "./models.js";
 import { basicTools } from "./tools/basic.js";
 import { googleWorkspaceTools } from "./tools/google-workspace.js";
 import { memoryTools } from "./tools/memory-tools.js";
+import {
+  startBackgroundRepoAnalysisTool,
+  checkBackgroundJobStatusTool,
+  listBackgroundJobsTool,
+} from "./tools/job-tools.js";
 import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
@@ -388,7 +393,18 @@ export async function getCompiledAgent() {
 
   // Load MCP tools from Filesystem MCP / GitHub MCP servers
   const mcpTools = await initializeMcpClient();
-  activeToolsList = [...basicTools, ...memoryTools, ...googleWorkspaceTools, ...mcpTools];
+  const jobTools = [
+    startBackgroundRepoAnalysisTool,
+    checkBackgroundJobStatusTool,
+    listBackgroundJobsTool,
+  ];
+  activeToolsList = [
+    ...basicTools,
+    ...memoryTools,
+    ...googleWorkspaceTools,
+    ...jobTools,
+    ...mcpTools,
+  ];
 
   // Register all tools in the permission registry (MCP tools default to WRITE if unknown)
   registerTools(
@@ -397,8 +413,18 @@ export async function getCompiledAgent() {
     false
   );
 
+  // Mark background status/list tools as READ
+  registerTools(
+    [
+      { name: "check_background_job_status", description: "Check status of a background job" },
+      { name: "list_my_background_jobs", description: "List background jobs" },
+    ],
+    ToolRiskLevel.READ,
+    true
+  );
+
   console.log(
-    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (3 basic + 3 memory + 6 Google Workspace + ${activeToolsList.length - 12} MCP)...`
+    `[Agent] Initializing LangGraph agent with ${activeToolsList.length} total tools (3 basic + 3 memory + 6 Google Workspace + 3 Background Jobs + ${activeToolsList.length - 15} MCP)...`
   );
 
   const formattedTools = activeToolsList.map(formatToolForModel);

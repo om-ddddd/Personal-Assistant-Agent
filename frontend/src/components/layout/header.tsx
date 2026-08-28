@@ -25,6 +25,8 @@ interface HeaderProps {
   onOpenPermissionManager?: () => void;
   pendingConfirmationsCount?: number;
   onOpenIntegrations?: () => void;
+  onOpenJobsDrawer?: () => void;
+  activeJobsCount?: number;
   currentUser?: UserProfile | null;
   onOpenAuth?: () => void;
   onLogout?: () => void;
@@ -41,6 +43,8 @@ export function Header({
   onOpenPermissionManager,
   pendingConfirmationsCount = 0,
   onOpenIntegrations,
+  onOpenJobsDrawer,
+  activeJobsCount = 0,
   currentUser,
   onOpenAuth,
   onLogout,
@@ -69,8 +73,31 @@ export function Header({
         </div>
       </div>
 
-      {/* Right side: Model Selector, Permission Gate button, and actions */}
+      {/* Right side: Model Selector, Tasks, Permission Gate button, and actions */}
       <div className="flex items-center gap-2.5 shrink-0">
+        {/* Background Tasks Manager Button */}
+        {onOpenJobsDrawer && (
+          <button
+            type="button"
+            onClick={onOpenJobsDrawer}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all hover:bg-zinc-900",
+              activeJobsCount > 0
+                ? "bg-emerald-950/40 border-emerald-700/80 text-emerald-300 animate-pulse shadow-sm shadow-emerald-950/50"
+                : "bg-zinc-900/90 border-zinc-800 text-zinc-300 hover:border-zinc-700"
+            )}
+            title="Open Background Task Manager (Redis 8 + BullMQ)"
+          >
+            <Zap className={cn("w-3.5 h-3.5", activeJobsCount > 0 ? "text-emerald-400" : "text-zinc-400")} />
+            <span className="hidden sm:inline text-[11px]">Tasks</span>
+            {activeJobsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-emerald-400 text-zinc-950">
+                {activeJobsCount}
+              </span>
+            )}
+          </button>
+        )}
+
         {/* Integrations & Accounts Button */}
         {onOpenIntegrations && (
           <button

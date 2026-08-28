@@ -16,7 +16,8 @@
     "test:github-oauth": "npx tsx src/test-github-oauth.ts",
     "test:github-capabilities": "npx tsx src/test-github-capabilities.ts",
     "test:user-auth": "npx tsx src/test-user-auth.ts",
-    "test:user-isolation": "npx tsx src/test-user-conversations-isolation.ts"
+    "test:user-isolation": "npx tsx src/test-user-conversations-isolation.ts",
+    "test:jobs": "npx tsx src/test-background-jobs.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.12",
@@ -32,10 +33,12 @@
     "@prisma/client": "^6.4.1",
     "@xenova/transformers": "^2.17.2",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^6.3.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "googleapis": "^176.0.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "zod": "^3.24.2"
