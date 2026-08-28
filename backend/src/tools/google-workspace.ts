@@ -156,6 +156,22 @@ export async function handleGoogleOAuthCallback(code: string) {
 }
 
 /**
+ * Clears stored Google OAuth tokens (Disconnect).
+ */
+export function clearStoredGoogleTokens(): boolean {
+  globalOAuth2Client = null;
+  try {
+    if (fs.existsSync(tokensFilePath)) {
+      fs.unlinkSync(tokensFilePath);
+      console.log("[GoogleOAuth] .google-tokens.json removed.");
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Returns current status of Google Workspace connection
  */
 export function getGoogleAuthStatus() {
@@ -167,6 +183,7 @@ export function getGoogleAuthStatus() {
     mode: hasLiveAuth ? "live" : "sandbox",
     hasClientId: !!process.env.GOOGLE_CLIENT_ID,
     hasClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+    email: stored?.email || undefined,
   };
 }
 

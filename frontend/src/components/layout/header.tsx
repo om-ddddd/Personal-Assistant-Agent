@@ -6,6 +6,7 @@ import {
   FolderGit2,
   Trash2,
   Shield,
+  Zap,
 } from "lucide-react";
 import { ModelSelector, ModelOption } from "@/components/assistant-ui/model-selector";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,7 @@ interface HeaderProps {
   isBackendHealthy?: boolean | null;
   onOpenPermissionManager?: () => void;
   pendingConfirmationsCount?: number;
+  onOpenIntegrations?: () => void;
 }
 
 export function Header({
@@ -32,6 +34,7 @@ export function Header({
   isBackendHealthy,
   onOpenPermissionManager,
   pendingConfirmationsCount = 0,
+  onOpenIntegrations,
 }: HeaderProps) {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between gap-4 select-none shrink-0 z-20">
@@ -59,6 +62,19 @@ export function Header({
 
       {/* Right side: Model Selector, Permission Gate button, and actions */}
       <div className="flex items-center gap-2.5 shrink-0">
+        {/* Integrations & Accounts Button */}
+        {onOpenIntegrations && (
+          <button
+            type="button"
+            onClick={onOpenIntegrations}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all bg-zinc-900/90 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900"
+            title="Manage Connected GitHub & Google Workspace Accounts"
+          >
+            <Zap className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline text-[11px]">Integrations</span>
+          </button>
+        )}
+
         {/* Permission Gate Manager Button */}
         {onOpenPermissionManager && (
           <button

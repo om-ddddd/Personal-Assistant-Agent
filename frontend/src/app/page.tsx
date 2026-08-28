@@ -6,7 +6,9 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
 import { PermissionManagerModal } from "@/components/permissions/permission-manager-modal";
+import { IntegrationsModal } from "@/components/auth/integrations-modal";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
+import { cn } from "@/lib/utils";
 import {
   useBackendRuntime,
   fetchThreads,
@@ -26,6 +28,10 @@ import {
   Calendar,
   Mail,
   FileCode,
+  Zap,
+  CheckCircle2,
+  AlertCircle,
+  X,
 } from "lucide-react";
 
 interface ActiveChatProps {
@@ -233,7 +239,48 @@ export default function Home() {
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
+  const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
   const [pendingConfirmationsCount, setPendingConfirmationsCount] = useState(0);
+  const [authNotification, setAuthNotification] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  // Check URL params for OAuth callback results
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const ghAuth = params.get("github_auth");
+    const gglAuth = params.get("google_auth");
+    const username = params.get("username");
+    const msg = params.get("message");
+
+    if (ghAuth === "success") {
+      setAuthNotification({
+        type: "success",
+        message: `GitHub account connected successfully! ${username ? `(@${username})` : ""}`,
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (ghAuth === "error") {
+      setAuthNotification({
+        type: "error",
+        message: `Failed to connect GitHub: ${msg ? decodeURIComponent(msg) : "Unknown error"}`,
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (gglAuth === "success") {
+      setAuthNotification({
+        type: "success",
+        message: "Google Workspace (Calendar & Gmail) connected successfully!",
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (gglAuth === "error") {
+      setAuthNotification({
+        type: "error",
+        message: `Failed to connect Google Workspace: ${msg ? decodeURIComponent(msg) : "Unknown error"}`,
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   // Poll pending confirmations count
   const refreshPendingCount = useCallback(async () => {
@@ -365,6 +412,7 @@ export default function Home() {
         isNewSessionDisabled={activeSession ? activeSession.messageCount === 0 : false}
         onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
         pendingConfirmationsCount={pendingConfirmationsCount}
+        onOpenIntegrations={() => setIsIntegrationsOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -379,7 +427,36 @@ export default function Home() {
           isBackendHealthy={isBackendHealthy}
           onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
           pendingConfirmationsCount={pendingConfirmationsCount}
+          onOpenIntegrations={() => setIsIntegrationsOpen(true)}
         />
+
+        {/* OAuth Notification Banner */}
+        {authNotification && (
+          <div
+            className={cn(
+              "px-4 py-2 text-xs flex items-center justify-between border-b font-mono animate-in slide-in-from-top duration-300",
+              authNotification.type === "success"
+                ? "bg-emerald-950/80 border-emerald-800/80 text-emerald-200"
+                : "bg-rose-950/80 border-rose-800/80 text-rose-200"
+            )}
+          >
+            <div className="flex items-center gap-2">
+              {authNotification.type === "success" ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span>{authNotification.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAuthNotification(null)}
+              className="p-1 rounded hover:bg-black/20 text-current"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Assistant Main Canvas */}
         <main className="flex-1 overflow-hidden relative">
@@ -410,6 +487,13 @@ export default function Home() {
         isOpen={isPermissionModalOpen}
         onClose={() => setIsPermissionModalOpen(false)}
         onRefreshThreads={refreshSessions}
+      />
+
+      {/* Connected Accounts & Integrations Modal */}
+      <IntegrationsModal
+        isOpen={isIntegrationsOpen}
+        onClose={() => setIsIntegrationsOpen(false)}
+        onStatusChange={refreshSessions}
       />
     </div>
   );

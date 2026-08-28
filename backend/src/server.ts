@@ -20,6 +20,7 @@ import {
   getGoogleOAuthUrl,
   handleGoogleOAuthCallback,
   getGoogleAuthStatus,
+  clearStoredGoogleTokens,
 } from "./tools/google-workspace.js";
 
 // Permission system imports
@@ -38,6 +39,14 @@ import {
   listAllMemories,
   deleteMemory as deleteLongTermMemory,
 } from "./memory/long-term.js";
+
+// GitHub OAuth imports
+import {
+  getGitHubOAuthUrl,
+  exchangeGitHubCode,
+  getGitHubAuthStatus,
+  clearStoredGitHubTokens,
+} from "./auth/github-oauth.js";
 
 dotenv.config();
 
@@ -405,6 +414,112 @@ export function createServer() {
       const error = err as Error;
       return res.status(500).json({ error: error.message || "Failed to search memories" });
     }
+  });
+
+  // =========================================================================
+  //                       GITHUB OAUTH ENDPOINTS
+  // =========================================================================
+
+  // Generate GitHub OAuth authorization URL
+  app.get("/api/auth/github/url", (req: Request, res: Response) => {
+    const state = String(req.query.state || "github_auth_state");
+    const url = getGitHubOAuthUrl(state);
+    return res.json({
+      url,
+      configured: !!process.env.GITHUB_CLIENT_ID,
+      redirectUri: process.env.GITHUB_REDIRECT_URI || "http://localhost:5000/api/auth/github/callback",
+    });
+  });
+
+  // OAuth callback handler
+  app.get("/api/auth/github/callback", async (req: Request, res: Response) => {
+    const code = String(req.query.code || "");
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
+    if (!code) {
+      return res.status(400).redirect(`${frontendUrl}?github_auth=error&message=Missing_authorization_code`);
+    }
+
+    try {
+      const tokens = await exchangeGitHubCode(code);
+      return res.redirect(`${frontendUrl}?github_auth=success&username=${tokens.user?.login || ""}`);
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error("[GitHubOAuth] Error exchanging code:", error);
+      return res.redirect(`${frontendUrl}?github_auth=error&message=${encodeURIComponent(error.message)}`);
+    }
+  });
+
+  // Get current GitHub connection status
+  app.get("/api/auth/github/status", async (_req: Request, res: Response) => {
+    try {
+      const status = await getGitHubAuthStatus();
+      return res.json(status);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to check GitHub auth status" });
+    }
+  });
+
+  // Disconnect GitHub OAuth tokens
+  app.post("/api/auth/github/disconnect", (_req: Request, res: Response) => {
+    const success = clearStoredGitHubTokens();
+    return res.json({ success, message: "GitHub disconnected." });
+  });
+
+  // =========================================================================
+  //                       GOOGLE OAUTH ENDPOINTS
+  // =========================================================================
+
+  // Generate Google OAuth authorization URL
+  app.get("/api/auth/google/url", async (_req: Request, res: Response) => {
+    try {
+      const url = await getGoogleOAuthUrl();
+      return res.json({
+        url,
+        configured: !!process.env.GOOGLE_CLIENT_ID,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI || "http://localhost:5000/api/auth/google/callback",
+      });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to generate Google OAuth URL" });
+    }
+  });
+
+  // Google OAuth callback handler
+  app.get("/api/auth/google/callback", async (req: Request, res: Response) => {
+    const code = String(req.query.code || "");
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
+    if (!code) {
+      return res.status(400).redirect(`${frontendUrl}?google_auth=error&message=Missing_authorization_code`);
+    }
+
+    try {
+      await handleGoogleOAuthCallback(code);
+      return res.redirect(`${frontendUrl}?google_auth=success`);
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error("[GoogleOAuth] Error exchanging code:", error);
+      return res.redirect(`${frontendUrl}?google_auth=error&message=${encodeURIComponent(error.message)}`);
+    }
+  });
+
+  // Get current Google connection status
+  app.get("/api/auth/google/status", (_req: Request, res: Response) => {
+    try {
+      const status = getGoogleAuthStatus();
+      return res.json(status);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to check Google auth status" });
+    }
+  });
+
+  // Disconnect Google OAuth tokens
+  app.post("/api/auth/google/disconnect", (_req: Request, res: Response) => {
+    const success = clearStoredGoogleTokens();
+    return res.json({ success, message: "Google Workspace disconnected." });
   });
 
   // =========================================================================

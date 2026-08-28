@@ -12,6 +12,8 @@ const workspaceRootDir = path.resolve(backendDir, "..");
 // Always load .env from backend/.env
 dotenv.config({ path: path.join(backendDir, ".env") });
 
+import { getGitHubAccessToken } from "../auth/github-oauth.js";
+
 let mcpClientInstance: MultiServerMCPClient | null = null;
 let loadedMcpTools: DynamicStructuredTool[] = [];
 
@@ -33,10 +35,7 @@ export async function initializeMcpClient(): Promise<DynamicStructuredTool[]> {
   const workspaceRoot = getWorkspaceRoot();
   const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 
-  const githubToken =
-    process.env.GITHUB_PERSONAL_ACCESS_TOKEN ||
-    process.env.GITHUB_TOKEN ||
-    "";
+  const githubToken = (await getGitHubAccessToken()) || "";
 
   const serverConfigs: Record<string, any> = {
     filesystem: {

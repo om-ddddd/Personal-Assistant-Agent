@@ -178,6 +178,13 @@ export function buildPromptWithMemoryContext(
 
   return `${baseSystemPrompt}
 
-## Conversation Context (Summary of Earlier Messages):
-${summary.trim()}`;
+<background_context>
+The following is an internal background summary of earlier conversation turns in this thread:
+${summary.trim()}
+
+CRITICAL INSTRUCTION FOR CONTEXT:
+- This background summary is strictly for your internal memory and contextual awareness.
+- NEVER quote, repeat, echo, summarize, or recite this background summary in your chat response.
+- Answer the user's latest message directly, naturally, and helpfully without referencing past summaries.
+</background_context>`;
 }

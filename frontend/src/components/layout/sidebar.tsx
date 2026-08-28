@@ -10,6 +10,7 @@ import {
   Cpu,
   ChevronLeft,
   ChevronRight,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThreadSession } from "@/lib/agent-runtime";
@@ -25,6 +26,7 @@ interface SidebarProps {
   isNewSessionDisabled?: boolean;
   onOpenPermissionManager?: () => void;
   pendingConfirmationsCount?: number;
+  onOpenIntegrations?: () => void;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -57,6 +59,7 @@ export function Sidebar({
   isNewSessionDisabled,
   onOpenPermissionManager,
   pendingConfirmationsCount = 0,
+  onOpenIntegrations,
 }: SidebarProps) {
   return (
     <aside
@@ -200,7 +203,25 @@ export function Sidebar({
               </span>
             </div>
 
-            {/* Status Item 2: Security Gate (Clickable) */}
+            {/* Status Item 2: Integrations (Clickable) */}
+            {onOpenIntegrations && (
+              <button
+                type="button"
+                onClick={onOpenIntegrations}
+                className="w-full p-2 rounded border border-zinc-800/60 bg-zinc-900/70 hover:bg-zinc-800 text-zinc-300 text-[11px] flex items-center justify-between transition-all text-left"
+                title="Manage Connected GitHub & Google Workspace Accounts"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Integrations</span>
+                </div>
+                <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-900/60">
+                  Accounts
+                </span>
+              </button>
+            )}
+
+            {/* Status Item 3: Security Gate (Clickable) */}
             <button
               type="button"
               onClick={onOpenPermissionManager}
@@ -230,6 +251,17 @@ export function Sidebar({
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2 py-1">
+            {onOpenIntegrations && (
+              <button
+                type="button"
+                onClick={onOpenIntegrations}
+                className="p-2 rounded hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 transition-colors"
+                title="Manage Integrations"
+              >
+                <Zap className="w-4 h-4 text-indigo-400" />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onOpenPermissionManager}

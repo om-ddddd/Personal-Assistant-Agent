@@ -98,15 +98,17 @@ export const getTimeTool = tool(
   }
 );
 
+import { getGitHubAccessToken } from "../auth/github-oauth.js";
+
 /**
  * List My GitHub Repositories Tool: Direct authenticated repository retrieval
  */
 export const listMyGithubRepositoriesTool = tool(
   async ({ per_page = 50 }: { per_page?: number }) => {
-    const token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN;
+    const token = await getGitHubAccessToken();
     if (!token) {
       return JSON.stringify({
-        error: "GITHUB_PERSONAL_ACCESS_TOKEN is not configured in backend/.env.",
+        error: "GitHub is not connected. Connect your GitHub account via the Integrations button in the UI or visit /api/auth/github/url.",
       });
     }
 
@@ -159,7 +161,7 @@ export const listMyGithubRepositoriesTool = tool(
   },
   {
     name: "list_my_github_repositories",
-    description: "Fetches all personal and collaborated GitHub repositories belonging to the authenticated user using GITHUB_PERSONAL_ACCESS_TOKEN.",
+    description: "Fetches all personal and collaborated GitHub repositories belonging to the authenticated user via GitHub OAuth.",
     schema: z.object({
       per_page: z.number().optional().describe("Maximum number of repositories to return (default: 50)"),
     }),

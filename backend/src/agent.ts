@@ -61,10 +61,12 @@ When the user asks to inspect, read, search, or list files in the project or wor
 When the user asks to list, inspect, or describe their own GitHub repositories, ALWAYS use the list_my_github_repositories tool.
 When the user asks about calendar events, meetings, scheduling, or emails, ALWAYS use the appropriate Google Workspace tools (list_calendar_events, create_calendar_event, list_emails, read_email, send_email).
 
-Long-Term Memory Rules:
+Memory and Context Rules:
 - When storing user facts or preferences with the save_memory tool, do so silently in the background and only store exact, verified facts provided by the user.
 - Never make robotic meta-announcements about internal memory systems (e.g. do NOT say "I have saved this in my long-term memory"). Respond naturally and conversationally to the user in context.
-- Only discuss or explain stored long-term memories if the user explicitly asks you to recall or list what you remember.
+- When background context or conversation summaries are provided in system prompt, use them strictly for internal contextual awareness.
+- NEVER quote, summarize, repeat, or recite the background context or conversation history to the user.
+- Respond directly, concisely, and helpfully to the user's latest request.
 
 Formatting Guidelines:
 - When presenting tabular data, ensure every Markdown table row is on its own separate line with standard newlines (never combine multiple rows into a single line).
@@ -1119,8 +1121,13 @@ export async function saveGraphImage(
     ? await targetApp.getGraphAsync()
     : targetApp.getGraph();
 
-  const blob = await graph.drawMermaidPng();
-  const buffer = Buffer.from(await blob.arrayBuffer());
-  await fs.writeFile(targetFilename, buffer);
-  console.log(`[Agent] Graph diagram saved to: ${targetFilename}`);
+  try {
+    const blob = await graph.drawMermaidPng();
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    await fs.writeFile(targetFilename, buffer);
+    console.log(`[Agent] Graph diagram saved to: ${targetFilename}`);
+  } catch (err: unknown) {
+    const error = err as Error;
+    console.warn(`[Agent] Could not render diagram image: ${error.message}`);
+  }
 }
