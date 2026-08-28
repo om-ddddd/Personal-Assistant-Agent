@@ -10,6 +10,7 @@ import {
   listThreads,
   createThread,
   deleteThread,
+  getThread,
   getThreadHistory,
   getCompiledAgent,
   getActiveTools,
@@ -299,9 +300,19 @@ export function createServer() {
   // =========================================================================
 
   // List all distinct thread sessions
-  app.get("/api/threads", (_req: Request, res: Response) => {
-    const threads = listThreads();
+  app.get("/api/threads", async (_req: Request, res: Response) => {
+    const threads = await listThreads();
     return res.json({ threads });
+  });
+
+  // Get specific thread details (including short-term memory summary)
+  app.get("/api/threads/:id", async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const thread = await getThread(id);
+    if (!thread) {
+      return res.status(404).json({ error: `Thread "${id}" not found.` });
+    }
+    return res.json({ thread });
   });
 
   // Create a new distinct thread session (Backend-generated UUID)
@@ -312,9 +323,9 @@ export function createServer() {
   });
 
   // Delete a thread session
-  app.delete("/api/threads/:id", (req: Request, res: Response) => {
+  app.delete("/api/threads/:id", async (req: Request, res: Response) => {
     const id = String(req.params.id);
-    const deleted = deleteThread(id);
+    const deleted = await deleteThread(id);
     return res.json({ success: deleted, id });
   });
 

@@ -1,0 +1,101 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// =========================================================================
+//                       APPLICATION PERSISTENCE MODELS
+// =========================================================================
+
+model Thread {
+  id            String                @id
+  title         String                @default("New Conversation")
+  summary       String?               @db.Text
+  messageCount  Int                   @default(0)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  metadata      Json?
+  messages      Message[]
+  confirmations PendingConfirmation[]
+
+  @@map("threads")
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  threadId   String
+  role       String
+  content    String   @db.Text
+  toolCalls  Json?
+  toolCallId String?
+  createdAt  DateTime @default(now())
+  thread     Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("messages")
+}
+
+model PendingConfirmation {
+  id          String    @id @default(uuid())
+  threadId    String
+  toolName    String
+  toolArgs    Json
+  riskLevel   String
+  status      String    @default("PENDING")
+  description String?
+  createdAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+  thread      Thread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, status])
+  @@map("pending_confirmations")
+}
+
+// =========================================================================
+//                   LANGGRAPH POSTGRES CHECKPOINTER MODELS
+// =========================================================================
+
+model checkpoint_blobs {
+  thread_id     String
+  checkpoint_ns String @default("")
+  channel       String
+  version       String
+  type          String
+  blob          Bytes?
+
+  @@id([thread_id, checkpoint_ns, channel, version])
+}
+
+model checkpoint_migrations {
+  v Int @id
+}
+
+model checkpoint_writes {
+  thread_id     String
+  checkpoint_ns String  @default("")
+  checkpoint_id String
+  task_id       String
+  idx           Int
+  channel       String
+  type          String?
+  blob          Bytes
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id, task_id, idx])
+}
+
+model checkpoints {
+  thread_id            String
+  checkpoint_ns        String  @default("")
+  checkpoint_id        String
+  parent_checkpoint_id String?
+  type                 String?
+  checkpoint           Json
+  metadata             Json    @default("{}")
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id])
+}

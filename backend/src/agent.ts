@@ -17,6 +17,18 @@ import { initializeMcpClient, getLoadedMcpTools } from "./mcp/client.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import crypto from "crypto";
 
+// Database & checkpointer imports
+import { prisma, isDatabaseConnected } from "./db/prisma.js";
+import { getCheckpointer } from "./db/checkpointer.js";
+
+// Short-term memory imports (trimming + progressive summarization)
+import {
+  trimConversationMessages,
+  summarizeConversationHistory,
+  buildPromptWithMemoryContext,
+  SHORT_TERM_MEMORY_CONFIG,
+} from "./memory/short-term.js";
+
 // Permission system imports
 import { ToolRiskLevel, ConfirmationStatus } from "./permissions/types.js";
 import { checkPermission, registerTools } from "./permissions/registry.js";
@@ -47,26 +59,44 @@ Formatting Guidelines:
 - Always provide concise, clear, and high-quality technical answers.
 - Do not use emojis in your responses.`;
 
-/**
- * Thread Metadata representation for session tracking
- */
 export interface ThreadMetadata {
   id: string;
   title: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  summary?: string;
 }
 
 /**
- * In-memory thread registry
+ * In-memory registry of thread metadata with Prisma DB persistence synchronization.
  */
 const threadStore = new Map<string, ThreadMetadata>();
 
 /**
- * List all active thread sessions, ordered by most recently updated
+ * List all registered threads (sorted newest first)
  */
-export function listThreads(): ThreadMetadata[] {
+export async function listThreads(): Promise<ThreadMetadata[]> {
+  if (isDatabaseConnected()) {
+    try {
+      const dbThreads = await prisma.thread.findMany({
+        orderBy: { updatedAt: "desc" },
+      });
+      if (dbThreads.length > 0) {
+        return dbThreads.map((t) => ({
+          id: t.id,
+          title: t.title,
+          createdAt: t.createdAt.toISOString(),
+          updatedAt: t.updatedAt.toISOString(),
+          messageCount: t.messageCount,
+          summary: t.summary || undefined,
+        }));
+      }
+    } catch {
+      // fallback to memory
+    }
+  }
+
   return Array.from(threadStore.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
@@ -86,20 +116,57 @@ export function createThread(initialTitle: string = "New Conversation"): ThreadM
     messageCount: 0,
   };
   threadStore.set(id, thread);
+
+  if (isDatabaseConnected()) {
+    prisma.thread
+      .create({
+        data: {
+          id,
+          title: initialTitle,
+          messageCount: 0,
+        },
+      })
+      .catch(() => {});
+  }
+
   return thread;
 }
 
 /**
- * Get thread metadata by ID
+ * Retrieve metadata for a single thread
  */
-export function getThread(id: string): ThreadMetadata | undefined {
+export async function getThread(id: string): Promise<ThreadMetadata | undefined> {
+  if (isDatabaseConnected()) {
+    try {
+      const dbThread = await prisma.thread.findUnique({ where: { id } });
+      if (dbThread) {
+        return {
+          id: dbThread.id,
+          title: dbThread.title,
+          createdAt: dbThread.createdAt.toISOString(),
+          updatedAt: dbThread.updatedAt.toISOString(),
+          messageCount: dbThread.messageCount,
+          summary: dbThread.summary || undefined,
+        };
+      }
+    } catch {
+      // fallback
+    }
+  }
   return threadStore.get(id);
 }
 
 /**
- * Delete a thread session from the registry
+ * Delete a thread session from the registry and database
  */
-export function deleteThread(id: string): boolean {
+export async function deleteThread(id: string): Promise<boolean> {
+  if (isDatabaseConnected()) {
+    try {
+      await prisma.thread.delete({ where: { id } });
+    } catch {
+      // ignore
+    }
+  }
   return threadStore.delete(id);
 }
 
@@ -124,6 +191,24 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
       messageCount: 1,
     };
     threadStore.set(id, thread);
+
+    if (isDatabaseConnected()) {
+      prisma.thread
+        .upsert({
+          where: { id },
+          create: {
+            id,
+            title,
+            messageCount: 1,
+          },
+          update: {
+            updatedAt: new Date(),
+            messageCount: { increment: 1 },
+          },
+        })
+        .catch(() => {});
+    }
+
     return thread;
   }
 
@@ -136,13 +221,32 @@ export function touchThread(id: string, prompt?: string): ThreadMetadata {
   }
 
   threadStore.set(id, thread);
+
+  if (isDatabaseConnected()) {
+    prisma.thread
+      .upsert({
+        where: { id },
+        create: {
+          id,
+          title: thread.title,
+          messageCount: thread.messageCount,
+        },
+        update: {
+          title: thread.title,
+          updatedAt: new Date(),
+          messageCount: thread.messageCount,
+        },
+      })
+      .catch(() => {});
+  }
+
   return thread;
 }
 
 /**
  * In-memory checkpointer for multi-turn thread retention
  */
-export const checkpointer = new MemorySaver();
+export const checkpointer = getCheckpointer();
 
 let compiledAgentInstance: any = null;
 let activeToolsList: any[] = [...basicTools, ...googleWorkspaceTools];
@@ -174,12 +278,16 @@ function formatToolForModel(tool: any) {
 export const MAX_AGENT_LOOPS = 10;
 
 /**
- * Custom State Annotation with loop counter and message history.
+ * Custom State Annotation with messages, progressive summary, and loop iteration guard.
  */
 export const AgentStateAnnotation = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
     reducer: (x, y) => x.concat(y),
     default: () => [],
+  }),
+  summary: Annotation<string>({
+    reducer: (x, y) => (y !== undefined && y !== "" ? y : (x || "")),
+    default: () => "",
   }),
   loopCount: Annotation<number>({
     reducer: (x, y) => (typeof y === "number" ? y : (x || 0)),
@@ -188,15 +296,8 @@ export const AgentStateAnnotation = Annotation.Root({
 });
 
 /**
- * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution.
- *
- * Graph topology:
- *   START -> agent -> (toolsCondition) -> permissionGate -> tools -> agent
- *                                      -> END
- *
- * The permissionGate node checks tool risk levels:
- * - READ tools: pass through immediately to the tools node
- * - WRITE/DESTRUCTIVE tools: call interrupt() to pause for HITL confirmation
+ * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution
+ * and short-term memory management (progressive summarization + sliding-window trimming).
  */
 export async function getCompiledAgent() {
   if (compiledAgentInstance) {
@@ -225,6 +326,38 @@ export async function getCompiledAgent() {
 
   const toolNode = new ToolNode(activeToolsList);
 
+  /**
+   * Dedicated Short-Term Memory Node:
+   * 1. Inspects message count against SUMMARIZATION_THRESHOLD.
+   * 2. Progressively summarizes older turns into an evolving summary string.
+   * 3. Synchronizes updated summary with database and state.
+   */
+  async function memoryNode(state: typeof AgentStateAnnotation.State, config?: any) {
+    const threadId = config?.configurable?.thread_id;
+    let currentSummary = state.summary || "";
+
+    if (state.messages.length >= SHORT_TERM_MEMORY_CONFIG.SUMMARIZATION_THRESHOLD) {
+      currentSummary = await summarizeConversationHistory(state.messages, currentSummary);
+      if (threadId && currentSummary) {
+        const stored = threadStore.get(threadId);
+        if (stored) {
+          stored.summary = currentSummary;
+          threadStore.set(threadId, stored);
+        }
+        if (isDatabaseConnected()) {
+          prisma.thread
+            .update({
+              where: { id: threadId },
+              data: { summary: currentSummary },
+            })
+            .catch(() => {});
+        }
+      }
+    }
+
+    return { summary: currentSummary };
+  }
+
   async function callModel(state: typeof AgentStateAnnotation.State) {
     const currentLoop = (state.loopCount || 0) + 1;
 
@@ -239,9 +372,18 @@ export async function getCompiledAgent() {
       return { messages: [guardMessage], loopCount: currentLoop };
     }
 
+    // Short-Term Memory: Prompt Trimming (Sliding Window without breaking tool pairs)
+    const trimmedMessages = await trimConversationMessages(state.messages);
+
+    // Inject running summary into System Prompt for the LLM
+    const systemPromptWithSummary = buildPromptWithMemoryContext(
+      SYSTEM_PROMPT,
+      state.summary || ""
+    );
+
     const messagesWithSystem: BaseMessage[] = [
-      new SystemMessage(SYSTEM_PROMPT),
-      ...state.messages,
+      new SystemMessage(systemPromptWithSummary),
+      ...trimmedMessages,
     ];
 
     const response = await modelWithTools.invoke(messagesWithSystem);
@@ -433,10 +575,12 @@ export async function getCompiledAgent() {
   }
 
   const workflow = new StateGraph(AgentStateAnnotation)
+    .addNode("memory", memoryNode)
     .addNode("agent", callModel)
     .addNode("permissionGate", permissionGate)
     .addNode("tools", toolNode)
-    .addEdge(START, "agent")
+    .addEdge(START, "memory")
+    .addEdge("memory", "agent")
     .addConditionalEdges("agent", routeAfterAgent, {
       permissionGate: "permissionGate",
       __end__: END,
@@ -447,9 +591,12 @@ export async function getCompiledAgent() {
     })
     .addEdge("tools", "agent");
 
+  const checkpointerInstance = await getCheckpointer();
+
   compiledAgentInstance = workflow.compile({
-    checkpointer,
+    checkpointer: checkpointerInstance,
   });
+  saveGraphImage(compiledAgentInstance, 'workflow.png')
   return compiledAgentInstance;
 }
 
@@ -470,6 +617,7 @@ export function getActiveTools() {
  * Roll back thread state in MemorySaver checkpointer to targetMessages
  */
 export async function rewindThreadState(threadId: string, targetMessages: BaseMessage[]) {
+  const checkpointer = await getCheckpointer();
   const config = { configurable: { thread_id: threadId } };
 
   if (checkpointer && (checkpointer as any).storage) {

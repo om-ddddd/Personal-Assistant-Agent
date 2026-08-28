@@ -14,6 +14,7 @@ import {
   ConfirmationStatus,
   PendingConfirmation,
 } from "./types.js";
+import { prisma, isDatabaseConnected } from "../db/prisma.js";
 
 /**
  * In-memory store of pending confirmations keyed by confirmation ID.
@@ -53,6 +54,29 @@ export function createPendingConfirmation(params: {
   };
 
   pendingStore.set(id, confirmation);
+
+  if (isDatabaseConnected()) {
+    prisma.thread
+      .upsert({
+        where: { id: params.threadId },
+        create: { id: params.threadId, title: "HITL Session" },
+        update: {},
+      })
+      .then(() =>
+        prisma.pendingConfirmation.create({
+          data: {
+            id,
+            threadId: params.threadId,
+            toolName: params.toolName,
+            toolArgs: params.toolArgs as any,
+            riskLevel: params.riskLevel,
+            status: ConfirmationStatus.PENDING,
+            description: confirmation.description,
+          },
+        })
+      )
+      .catch(() => {});
+  }
 
   console.log(
     `[PermissionManager] Created pending confirmation ${id} for tool "${params.toolName}" (${params.riskLevel}) on thread "${params.threadId}"`
@@ -94,6 +118,18 @@ export function resolvePendingConfirmation(
   confirmation.resolvedAt = new Date().toISOString();
 
   pendingStore.set(confirmationId, confirmation);
+
+  if (isDatabaseConnected()) {
+    prisma.pendingConfirmation
+      .updateMany({
+        where: { id: confirmationId },
+        data: {
+          status: confirmation.status,
+          resolvedAt: new Date(confirmation.resolvedAt),
+        },
+      })
+      .catch(() => {});
+  }
 
   console.log(
     `[PermissionManager] Confirmation ${confirmationId} resolved: ${confirmation.status}`
