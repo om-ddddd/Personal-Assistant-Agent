@@ -131,19 +131,29 @@ export async function summarizeConversationHistory(
     .join("\n");
 
   const prompt = existingSummary
-    ? `You are an expert conversation summarizer.
-Current summary of previous conversation:
+    ? `You are an internal memory summarizer for an AI assistant.
+Current memory notes:
 "${existingSummary}"
 
-New conversation turns to incorporate:
+Recent conversation turns:
 ${transcript}
 
-Create a concise, updated summary capturing all key user requests, decisions, facts, and tool results. Keep it under 200 words. Do not use emojis.`
-    : `You are an expert conversation summarizer.
+Task: Update the memory notes into a concise, bulleted list of essential user facts, project context, active user requests, and tool outcomes.
+Rules:
+- Format as bullet points starting with "- "
+- Do NOT write narrative paragraphs or stories (never start with "The user opened...", "The user began...", "The conversation started...").
+- Keep it under 150 words.
+- Do not use emojis.`
+    : `You are an internal memory summarizer for an AI assistant.
 Conversation turns to summarize:
 ${transcript}
 
-Create a concise summary capturing the user's primary objectives, preferences, key facts, and tool results so far. Keep it under 150 words. Do not use emojis.`;
+Task: Distill the conversation into a concise, bulleted list of essential user facts, project context, active user requests, and tool outcomes.
+Rules:
+- Format as bullet points starting with "- "
+- Do NOT write narrative paragraphs or stories (never start with "The user opened...", "The user began...", "The conversation started...").
+- Keep it under 150 words.
+- Do not use emojis.`;
 
   try {
     const response = await model.invoke([new HumanMessage(prompt)]);
@@ -178,13 +188,55 @@ export function buildPromptWithMemoryContext(
 
   return `${baseSystemPrompt}
 
-<background_context>
-The following is an internal background summary of earlier conversation turns in this thread:
+## Internal Conversation Memory (DO NOT REPEAT OR RECAP TO USER):
+The following are internal notes summarizing earlier turns in this conversation thread:
 ${summary.trim()}
 
-CRITICAL INSTRUCTION FOR CONTEXT:
-- This background summary is strictly for your internal memory and contextual awareness.
-- NEVER quote, repeat, echo, summarize, or recite this background summary in your chat response.
-- Answer the user's latest message directly, naturally, and helpfully without referencing past summaries.
-</background_context>`;
+Strict Instruction: This internal memory is strictly for your background awareness. NEVER repeat, quote, recite, or summarize this memory in your response to the user. Answer the user's latest prompt directly.`;
 }
+
+/**
+ * Strips any echoed conversation summary, background context tags, or narrative preamble
+ * that the model may inadvertently prefix to its response.
+ */
+export function stripEchoedSummary(text: string, summary?: string): string {
+  if (!text) return "";
+  let cleaned = text;
+
+  // 1. Strip XML-like wrapper leaks if present
+  cleaned = cleaned.replace(/^<background_context>[\s\S]*?<\/background_context>\s*/i, "");
+  cleaned = cleaned.replace(/^##\s*Internal Conversation Memory[\s\S]*?(?=\n\n|\n[A-Z0-9]|$)/i, "");
+
+  // 2. Strip exact or near-exact summary text if the model echoed it at the start
+  if (summary && summary.trim()) {
+    const trimmedSummary = summary.trim();
+    if (cleaned.startsWith(trimmedSummary)) {
+      cleaned = cleaned.slice(trimmedSummary.length).trimStart();
+    } else {
+      // Check first sentence or first 40 chars of summary
+      const firstSentence = trimmedSummary.split(/[.!?]\s+/)[0];
+      if (firstSentence && firstSentence.length > 15 && cleaned.startsWith(firstSentence)) {
+        const last30 = trimmedSummary.slice(-30);
+        const summaryEndIdx = cleaned.indexOf(last30);
+        if (summaryEndIdx !== -1) {
+          cleaned = cleaned.slice(summaryEndIdx + last30.length).trimStart();
+        } else {
+          const paragraphEnd = cleaned.indexOf("\n\n");
+          if (paragraphEnd !== -1 && paragraphEnd <= trimmedSummary.length + 50) {
+            cleaned = cleaned.slice(paragraphEnd + 2).trimStart();
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Strip narrative preamble patterns even if summary string was not passed or slightly varied
+  const narrativeBlockRegex = /^(?:(?:The user|After (?:the|receiving)|The assistant|It responded|Finally,|In this exchange|No external tools|No personal info)[\s\S]*?\.\s*)+(?=(?:I |I'm|I've|I'd|I don't|Sure|Here|Hello|Hi|Please|Based on|According to|\d|\*|\#))/i;
+
+  if (narrativeBlockRegex.test(cleaned)) {
+    cleaned = cleaned.replace(narrativeBlockRegex, "").trimStart();
+  }
+
+  return cleaned;
+}
+

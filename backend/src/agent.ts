@@ -32,6 +32,7 @@ import {
   trimConversationMessages,
   summarizeConversationHistory,
   buildPromptWithMemoryContext,
+  stripEchoedSummary,
   SHORT_TERM_MEMORY_CONFIG,
 } from "./memory/short-term.js";
 
@@ -70,14 +71,16 @@ Memory and Context Rules:
 - When storing user facts or preferences with the save_memory tool, do so silently in the background and only store exact, verified facts provided by the user.
 - Never make robotic meta-announcements about internal memory systems (e.g. do NOT say "I have saved this in my long-term memory"). Respond naturally and conversationally to the user in context.
 - When background context or conversation summaries are provided in system prompt, use them strictly for internal contextual awareness.
-- NEVER quote, summarize, repeat, or recite the background context or conversation history to the user.
-- Respond directly, concisely, and helpfully to the user's latest request.
+- CRITICAL: NEVER output, repeat, summarize, echo, or recite internal memory, past conversation summaries, or operational status logs to the user.
+- NEVER begin your response with "The user began...", "The user opened...", or any narrative summary of previous turns.
+- Always respond directly, concisely, and helpfully to the user's latest request.
 
 Formatting Guidelines:
 - When presenting tabular data, ensure every Markdown table row is on its own separate line with standard newlines (never combine multiple rows into a single line).
 - Alternatively, format lists of repositories, files, events, or emails using clean, structured Markdown bullet points.
 - Always provide concise, clear, and high-quality technical answers.
 - Do not use emojis in your responses.`;
+
 
 export interface ThreadMetadata {
   id: string;
@@ -518,6 +521,9 @@ export async function getCompiledAgent() {
     ];
 
     const response = await modelWithTools.invoke(messagesWithSystem);
+    if (typeof response.content === "string") {
+      response.content = stripEchoedSummary(response.content, state.summary);
+    }
     return { messages: [response], loopCount: currentLoop };
   }
 
@@ -940,9 +946,11 @@ export async function invokeAgent(
 
   const lastMessage = result.messages[result.messages.length - 1];
   const toolMessages = result.messages.filter((m: BaseMessage) => m instanceof ToolMessage);
+  const rawContent = typeof lastMessage.content === "string" ? lastMessage.content : JSON.stringify(lastMessage.content);
+  const cleanContent = stripEchoedSummary(rawContent, state?.values?.summary);
 
   return {
-    content: typeof lastMessage.content === "string" ? lastMessage.content : JSON.stringify(lastMessage.content),
+    content: cleanContent,
     messages: result.messages,
     toolCallsCount: toolMessages.length,
     toolMessages,
@@ -982,11 +990,72 @@ export async function resumeAfterConfirmation(
   );
 
   const lastMessage = result.messages[result.messages.length - 1];
-  const content = typeof lastMessage.content === "string"
+  const rawContent = typeof lastMessage.content === "string"
     ? lastMessage.content
     : JSON.stringify(lastMessage.content);
+  const content = stripEchoedSummary(rawContent);
 
   return { content, interrupted: false };
+}
+
+/**
+ * Helper class to filter out any echoed internal summary or preamble
+ * from streaming token chunks before sending to the client.
+ */
+class StreamTokenSanitizer {
+  private isStartOfStream = true;
+  private streamBuffer = "";
+  private summary?: string;
+  private minBufferLength: number;
+
+  constructor(summary?: string) {
+    this.summary = summary;
+    this.minBufferLength = Math.max(250, (summary?.length || 0) + 20);
+  }
+
+  processChunk(text: string): string[] {
+    if (!text) return [];
+
+    if (!this.isStartOfStream) {
+      return [text];
+    }
+
+    this.streamBuffer += text;
+
+    const trimmedSummary = this.summary?.trim() || "";
+    const looksLikeLeakage =
+      (trimmedSummary.length > 15 && this.streamBuffer.startsWith(trimmedSummary.slice(0, 15))) ||
+      /^The user (began|opened|started|inquired|asked|queried|greeted)/i.test(this.streamBuffer) ||
+      /^<background_context>/i.test(this.streamBuffer) ||
+      /^## Internal Conversation Memory/i.test(this.streamBuffer);
+
+    if (!looksLikeLeakage) {
+      this.isStartOfStream = false;
+      const out = this.streamBuffer;
+      this.streamBuffer = "";
+      return [out];
+    }
+
+    // Only buffer if it matches the pattern of a leaked summary
+    if (this.streamBuffer.length >= this.minBufferLength || this.streamBuffer.includes("\n\n")) {
+      const cleaned = stripEchoedSummary(this.streamBuffer, this.summary);
+      this.isStartOfStream = false;
+      this.streamBuffer = "";
+      return cleaned ? [cleaned] : [];
+    }
+
+    return [];
+  }
+
+  flush(): string | null {
+    if (this.isStartOfStream && this.streamBuffer) {
+      const cleaned = stripEchoedSummary(this.streamBuffer, this.summary);
+      this.streamBuffer = "";
+      this.isStartOfStream = false;
+      return cleaned || null;
+    }
+    return null;
+  }
 }
 
 /**
@@ -1007,6 +1076,8 @@ export async function* streamAgentEvents(
 
   // Regeneration detection: if last human message is identical to incoming prompt, rewind previous turn
   const state = await agentInstance.getState(config);
+  const threadSummary = state?.values?.summary;
+
   if (state && state.values && state.values.messages && state.values.messages.length > 0) {
     const currentMsgs: BaseMessage[] = state.values.messages;
     let lastHumanIdx = -1;
@@ -1041,6 +1112,8 @@ export async function* streamAgentEvents(
     }
   );
 
+  const sanitizer = new StreamTokenSanitizer(threadSummary);
+
   for await (const event of eventStream) {
     if (event.event === "on_chat_model_stream" && event.data?.chunk) {
       const chunk = event.data.chunk;
@@ -1051,7 +1124,10 @@ export async function* streamAgentEvents(
         text = chunk.content.map((c: any) => (typeof c === "string" ? c : c.text || "")).join("");
       }
       if (text) {
-        yield { type: "text", text };
+        const outChunks = sanitizer.processChunk(text);
+        for (const outText of outChunks) {
+          yield { type: "text", text: outText };
+        }
       }
     } else if (event.event === "on_tool_start") {
       let rawInput = event.data?.input;
@@ -1079,6 +1155,11 @@ export async function* streamAgentEvents(
         output: outputStr,
       };
     }
+  }
+
+  const trailingText = sanitizer.flush();
+  if (trailingText) {
+    yield { type: "text", text: trailingText };
   }
 }
 
@@ -1106,6 +1187,9 @@ export async function* streamResumeEvents(threadId: string, approved: boolean) {
     }
   }
 
+  const state = await agentInstance.getState(config);
+  const threadSummary = state?.values?.summary;
+
   const eventStream = agentInstance.streamEvents(
     new Command({ resume: { approved } }),
     {
@@ -1113,6 +1197,8 @@ export async function* streamResumeEvents(threadId: string, approved: boolean) {
       version: "v2",
     }
   );
+
+  const sanitizer = new StreamTokenSanitizer(threadSummary);
 
   for await (const event of eventStream) {
     if (event.event === "on_chat_model_stream" && event.data?.chunk) {
@@ -1124,7 +1210,10 @@ export async function* streamResumeEvents(threadId: string, approved: boolean) {
         text = chunk.content.map((c: any) => (typeof c === "string" ? c : c.text || "")).join("");
       }
       if (text) {
-        yield { type: "text", text };
+        const outChunks = sanitizer.processChunk(text);
+        for (const outText of outChunks) {
+          yield { type: "text", text: outText };
+        }
       }
     } else if (event.event === "on_tool_start") {
       let rawInput = event.data?.input;
@@ -1152,6 +1241,11 @@ export async function* streamResumeEvents(threadId: string, approved: boolean) {
         output: outputStr,
       };
     }
+  }
+
+  const trailingText = sanitizer.flush();
+  if (trailingText) {
+    yield { type: "text", text: trailingText };
   }
 }
 
