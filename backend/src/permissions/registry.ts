@@ -11,6 +11,7 @@ import {
   ToolPermissionEntry,
   PermissionDecision,
 } from "./types.js";
+import { classifyTerminalCommand } from "../tools/terminal.js";
 
 /**
  * Internal registry map: toolName -> ToolPermissionEntry
@@ -26,6 +27,7 @@ const DEFAULT_CLASSIFICATIONS: Record<string, ToolRiskLevel> = {
   calculator: ToolRiskLevel.READ,
   get_time: ToolRiskLevel.READ,
   list_my_github_repositories: ToolRiskLevel.READ,
+  run_terminal_command: ToolRiskLevel.WRITE,
 
   // Long-Term Memory Tools
   recall_memories: ToolRiskLevel.READ,
@@ -156,9 +158,14 @@ export function getToolRiskLevel(toolName: string): ToolRiskLevel {
  * Check whether a tool call is permitted and whether it requires
  * human-in-the-loop confirmation.
  */
-export function checkPermission(toolName: string): PermissionDecision {
+export function checkPermission(toolName: string, toolArgs?: any): PermissionDecision {
   ensureInitialized();
-  const riskLevel = getToolRiskLevel(toolName);
+  let riskLevel = getToolRiskLevel(toolName);
+
+  // Dynamic risk evaluation for terminal commands
+  if (toolName === "run_terminal_command" && toolArgs?.command && typeof toolArgs.command === "string") {
+    riskLevel = classifyTerminalCommand(toolArgs.command);
+  }
 
   return {
     toolName,

@@ -11,7 +11,8 @@
     "test:agent": "npx tsx src/test-agent.ts",
     "test:permissions": "npx tsx src/test-permissions.ts",
     "test:memory": "npx tsx src/test-memory-persistence.ts",
-    "test:long-term": "npx tsx src/test-long-term-memory.ts"
+    "test:long-term": "npx tsx src/test-long-term-memory.ts",
+    "test:terminal": "npx tsx src/test-terminal-tool.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.12",

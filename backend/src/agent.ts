@@ -483,7 +483,7 @@ export async function getCompiledAgent() {
 
     // Check each tool call's permission
     for (const tc of toolCalls) {
-      const decision = checkPermission(tc.name);
+      const decision = checkPermission(tc.name, tc.args);
       if (decision.requiresConfirmation) {
         toolsNeedingConfirmation.push({
           name: tc.name,

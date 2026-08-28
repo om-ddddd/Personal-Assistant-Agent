@@ -166,7 +166,15 @@ export const listMyGithubRepositoriesTool = tool(
   }
 );
 
+import { runTerminalCommandTool } from "./terminal.js";
+export { runTerminalCommandTool };
+
 /**
  * Exported basic tools array
  */
-export const basicTools = [calculatorTool, getTimeTool, listMyGithubRepositoriesTool];
+export const basicTools = [
+  calculatorTool,
+  getTimeTool,
+  listMyGithubRepositoriesTool,
+  runTerminalCommandTool,
+];
