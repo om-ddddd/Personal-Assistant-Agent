@@ -7,8 +7,14 @@ import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
 import { PermissionManagerModal } from "@/components/permissions/permission-manager-modal";
 import { IntegrationsModal } from "@/components/auth/integrations-modal";
+import { UserAuthModal } from "@/components/auth/user-auth-modal";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
 import { cn } from "@/lib/utils";
+import {
+  UserProfile,
+  apiGetMe,
+  apiLogout,
+} from "@/lib/user-auth";
 import {
   useBackendRuntime,
   fetchThreads,
@@ -240,11 +246,27 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
   const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [pendingConfirmationsCount, setPendingConfirmationsCount] = useState(0);
   const [authNotification, setAuthNotification] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  // Load active user session on startup
+  useEffect(() => {
+    apiGetMe().then((user) => {
+      if (user) {
+        setCurrentUser(user);
+      }
+    });
+  }, []);
+
+  const handleLogout = async () => {
+    await apiLogout();
+    setCurrentUser(null);
+  };
 
   // Check URL params for OAuth callback results
   useEffect(() => {
@@ -413,6 +435,9 @@ export default function Home() {
         onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
         pendingConfirmationsCount={pendingConfirmationsCount}
         onOpenIntegrations={() => setIsIntegrationsOpen(true)}
+        currentUser={currentUser}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -428,6 +453,9 @@ export default function Home() {
           onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
           pendingConfirmationsCount={pendingConfirmationsCount}
           onOpenIntegrations={() => setIsIntegrationsOpen(true)}
+          currentUser={currentUser}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
+          onLogout={handleLogout}
         />
 
         {/* OAuth Notification Banner */}
@@ -494,6 +522,19 @@ export default function Home() {
         isOpen={isIntegrationsOpen}
         onClose={() => setIsIntegrationsOpen(false)}
         onStatusChange={refreshSessions}
+      />
+
+      {/* User Login / Sign Up Modal */}
+      <UserAuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={(user) => {
+          setCurrentUser(user);
+          setAuthNotification({
+            type: "success",
+            message: `Welcome, ${user.name || user.email}! You are now logged in.`,
+          });
+        }}
       />
     </div>
   );

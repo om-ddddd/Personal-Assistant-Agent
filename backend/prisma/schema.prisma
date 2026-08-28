@@ -12,17 +12,32 @@ generator client {
 //                       APPLICATION PERSISTENCE MODELS
 // =========================================================================
 
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  threads      Thread[]
+
+  @@map("users")
+}
+
 model Thread {
   id            String                @id
+  userId        String?
   title         String                @default("New Conversation")
   summary       String?               @db.Text
   messageCount  Int                   @default(0)
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
   metadata      Json?
+  user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   messages      Message[]
   confirmations PendingConfirmation[]
 
+  @@index([userId])
   @@map("threads")
 }
 

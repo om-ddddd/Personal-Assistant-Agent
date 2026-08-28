@@ -7,8 +7,11 @@ import {
   Trash2,
   Shield,
   Zap,
+  User,
+  LogOut,
 } from "lucide-react";
 import { ModelSelector, ModelOption } from "@/components/assistant-ui/model-selector";
+import { UserProfile } from "@/lib/user-auth";
 import { cn } from "@/lib/utils";
 
 interface HeaderProps {
@@ -22,6 +25,9 @@ interface HeaderProps {
   onOpenPermissionManager?: () => void;
   pendingConfirmationsCount?: number;
   onOpenIntegrations?: () => void;
+  currentUser?: UserProfile | null;
+  onOpenAuth?: () => void;
+  onLogout?: () => void;
 }
 
 export function Header({
@@ -35,6 +41,9 @@ export function Header({
   onOpenPermissionManager,
   pendingConfirmationsCount = 0,
   onOpenIntegrations,
+  currentUser,
+  onOpenAuth,
+  onLogout,
 }: HeaderProps) {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between gap-4 select-none shrink-0 z-20">
@@ -151,6 +160,45 @@ export function Header({
           >
             <Trash2 className="w-4 h-4" />
           </button>
+        )}
+
+        {/* User Account / Login Button */}
+        {currentUser ? (
+          <div className="flex items-center gap-1.5 pl-1.5 border-l border-zinc-800">
+            <div
+              className="flex items-center gap-2 px-2 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-xs text-zinc-200"
+              title={`Logged in as ${currentUser.email}`}
+            >
+              <div className="w-5 h-5 rounded-full bg-blue-600/30 border border-blue-500/40 text-blue-300 font-semibold text-[10px] flex items-center justify-center">
+                {(currentUser.name || currentUser.email || "U").slice(0, 2).toUpperCase()}
+              </div>
+              <span className="hidden lg:inline text-[11px] font-medium max-w-[100px] truncate">
+                {currentUser.name || currentUser.email.split("@")[0]}
+              </span>
+            </div>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="p-1.5 rounded-md text-zinc-400 hover:text-rose-400 hover:bg-zinc-900 border border-zinc-800 transition-colors"
+                title="Log Out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        ) : (
+          onOpenAuth && (
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-all shadow-sm shadow-blue-600/20"
+              title="Sign in to your account"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span className="text-[11px]">Sign In</span>
+            </button>
+          )
         )}
       </div>
     </header>

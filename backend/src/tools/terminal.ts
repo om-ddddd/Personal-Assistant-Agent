@@ -24,6 +24,19 @@ const DANGEROUS_PATTERNS = [
 ];
 
 /**
+ * Check if a command matches any dangerous destructive patterns.
+ */
+export function isDangerousCommand(command: string): { blocked: boolean; pattern?: string } {
+  const trimmed = command.trim();
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return { blocked: true, pattern: pattern.toString() };
+    }
+  }
+  return { blocked: false };
+}
+
+/**
  * Classify a terminal command's risk level dynamically.
  */
 export function classifyTerminalCommand(command: string): ToolRiskLevel {
@@ -67,8 +80,8 @@ export function sanitizeOutput(output: string): string {
   return output
     .replace(/nvapi-[a-zA-Z0-9_-]{20,}/g, "[REDACTED_NVIDIA_KEY]")
     .replace(/gsk_[a-zA-Z0-9_-]{20,}/g, "[REDACTED_GROQ_KEY]")
-    .replace(/ghp_[a-zA-Z0-9]{20,}/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/postgresql:\/\/[^@\s]+@[^\s]+/g, "postgresql://[REDACTED_DB_CREDENTIALS]")
+    .replace(/ghp_[a-zA-Z0-9]{20,}/g, "[REDACTED_API_TOKEN]")
+    .replace(/postgresql:\/\/[^@\s]+@[^\s]+/g, "[REDACTED_DATABASE_URI]")
     .replace(/Bearer\s+[a-zA-Z0-9._-]{20,}/gi, "Bearer [REDACTED_TOKEN]");
 }
 
@@ -163,6 +176,17 @@ export async function executeTerminalCommand(
       }
     );
   });
+}
+
+/**
+ * Convenience helper for object-based invocation.
+ */
+export async function run_terminal_command(args: {
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+}) {
+  return executeTerminalCommand(args.command, args.cwd, args.timeoutMs);
 }
 
 /**

@@ -11,9 +11,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
+  User,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThreadSession } from "@/lib/agent-runtime";
+import { UserProfile } from "@/lib/user-auth";
 
 interface SidebarProps {
   sessions: ThreadSession[];
@@ -27,6 +30,9 @@ interface SidebarProps {
   onOpenPermissionManager?: () => void;
   pendingConfirmationsCount?: number;
   onOpenIntegrations?: () => void;
+  currentUser?: UserProfile | null;
+  onOpenAuth?: () => void;
+  onLogout?: () => void;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -60,6 +66,9 @@ export function Sidebar({
   onOpenPermissionManager,
   pendingConfirmationsCount = 0,
   onOpenIntegrations,
+  currentUser,
+  onOpenAuth,
+  onLogout,
 }: SidebarProps) {
   return (
     <aside
@@ -248,9 +257,71 @@ export function Sidebar({
                 {pendingConfirmationsCount > 0 ? `${pendingConfirmationsCount} Pending` : "Enforced"}
               </span>
             </button>
+
+            {/* User Account / Profile */}
+            <div className="pt-1 border-t border-zinc-800/80">
+              {currentUser ? (
+                <div className="flex items-center justify-between p-2 rounded-lg bg-zinc-900/60 border border-zinc-800/60 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded-full bg-blue-600/30 border border-blue-500/40 text-blue-300 font-semibold text-[10px] flex items-center justify-center shrink-0">
+                      {(currentUser.name || currentUser.email || "U").slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium text-zinc-200 truncate">
+                        {currentUser.name || "Developer"}
+                      </p>
+                      <p className="text-[10px] text-zinc-400 truncate">
+                        {currentUser.email}
+                      </p>
+                    </div>
+                  </div>
+                  {onLogout && (
+                    <button
+                      type="button"
+                      onClick={onLogout}
+                      className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors"
+                      title="Log Out"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                onOpenAuth && (
+                  <button
+                    type="button"
+                    onClick={onOpenAuth}
+                    className="w-full py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center justify-center gap-2 transition-all shadow-sm shadow-blue-600/20"
+                  >
+                    <User className="w-3.5 h-3.5" />
+                    <span>Sign In / Register</span>
+                  </button>
+                )
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2 py-1">
+            {currentUser ? (
+              <div
+                className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/40 text-blue-300 font-semibold text-[10px] flex items-center justify-center"
+                title={`Logged in as ${currentUser.email}`}
+              >
+                {(currentUser.name || currentUser.email || "U").slice(0, 2).toUpperCase()}
+              </div>
+            ) : (
+              onOpenAuth && (
+                <button
+                  type="button"
+                  onClick={onOpenAuth}
+                  className="p-2 rounded hover:bg-zinc-900 text-zinc-400 hover:text-blue-400 transition-colors"
+                  title="Sign In"
+                >
+                  <User className="w-4 h-4" />
+                </button>
+              )
+            )}
+
             {onOpenIntegrations && (
               <button
                 type="button"

@@ -57,3 +57,5 @@ export async function embedText(
 
   return data.data[0].embedding;
 }
+
+export const generateNimEmbedding = embedText;

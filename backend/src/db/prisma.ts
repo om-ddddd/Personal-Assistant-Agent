@@ -29,6 +29,25 @@ export async function checkDatabaseConnection(): Promise<boolean> {
   try {
     const client = getPrismaClient();
     await client.$queryRaw`SELECT 1`;
+
+    try {
+      await client.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT UNIQUE NOT NULL,
+          "passwordHash" TEXT NOT NULL,
+          name TEXT,
+          "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+      await client.$executeRawUnsafe(`
+        ALTER TABLE threads ADD COLUMN IF NOT EXISTS "userId" TEXT;
+      `);
+    } catch {
+      // ignore table sync warning
+    }
+
     isConnected = true;
     console.log("[Database] PostgreSQL connection established successfully via Prisma.");
   } catch (err: unknown) {

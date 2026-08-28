@@ -384,3 +384,8 @@ export function formatLongTermMemoriesForPrompt(memories: LongTermMemoryItem[]):
 The following persistent facts, user preferences, and project rules have been recalled across conversation threads:
 ${lines.join("\n")}`;
 }
+
+export const saveMemory = saveLongTermMemory;
+export const recallMemories = searchRelevantMemories;
+export const forgetMemory = deleteMemory;
+export const listMemories = listAllMemories;

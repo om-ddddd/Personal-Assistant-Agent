@@ -48,6 +48,14 @@ import {
   clearStoredGitHubTokens,
 } from "./auth/github-oauth.js";
 
+// User Authentication imports
+import {
+  signUpUser,
+  loginUser,
+  verifyAuthToken,
+  getUserById,
+} from "./auth/user-auth.js";
+
 dotenv.config();
 
 export function createServer() {
@@ -414,6 +422,60 @@ export function createServer() {
       const error = err as Error;
       return res.status(500).json({ error: error.message || "Failed to search memories" });
     }
+  });
+
+  // =========================================================================
+  //                       USER AUTHENTICATION ENDPOINTS
+  // =========================================================================
+
+  // Sign up new user
+  app.post("/api/auth/signup", async (req: Request, res: Response) => {
+    try {
+      const { email, password, name } = req.body;
+      const result = await signUpUser(email, password, name);
+      return res.status(201).json(result);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(400).json({ error: error.message || "Failed to sign up." });
+    }
+  });
+
+  // Log in existing user
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+      const result = await loginUser(email, password);
+      return res.json(result);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(401).json({ error: error.message || "Failed to log in." });
+    }
+  });
+
+  // Get current user profile from Bearer token
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ error: "No authentication token provided." });
+      }
+
+      const decoded = verifyAuthToken(authHeader);
+      const user = await getUserById(decoded.userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+
+      return res.json({ user });
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(401).json({ error: error.message || "Invalid token." });
+    }
+  });
+
+  // Logout endpoint
+  app.post("/api/auth/logout", (_req: Request, res: Response) => {
+    return res.json({ success: true, message: "Logged out successfully." });
   });
 
   // =========================================================================
