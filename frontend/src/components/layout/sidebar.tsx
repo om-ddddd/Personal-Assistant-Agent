@@ -212,20 +212,20 @@ export function Sidebar({
               </span>
             </div>
 
-            {/* Status Item 2: Integrations (Clickable) */}
+            {/* Status Item 2: Setup & Integrations (Clickable) */}
             {onOpenIntegrations && (
               <button
                 type="button"
                 onClick={onOpenIntegrations}
                 className="w-full p-2 rounded border border-zinc-800/60 bg-zinc-900/70 hover:bg-zinc-800 text-zinc-300 text-[11px] flex items-center justify-between transition-all text-left"
-                title="Manage Connected GitHub & Google Workspace Accounts"
+                title="Manage GitHub, Google Workspace, and Workspace Directory Setup"
               >
                 <div className="flex items-center gap-1.5">
                   <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Integrations</span>
+                  <span>Setup & Integrations</span>
                 </div>
                 <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-900/60">
-                  Accounts
+                  Required
                 </span>
               </button>
             )}

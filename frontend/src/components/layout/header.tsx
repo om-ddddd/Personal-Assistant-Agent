@@ -9,6 +9,7 @@ import {
   Zap,
   User,
   LogOut,
+  Key,
 } from "lucide-react";
 import { ModelSelector, ModelOption } from "@/components/assistant-ui/model-selector";
 import { UserProfile } from "@/lib/user-auth";
@@ -30,6 +31,7 @@ interface HeaderProps {
   currentUser?: UserProfile | null;
   onOpenAuth?: () => void;
   onLogout?: () => void;
+  onOpenLlmProfile?: () => void;
 }
 
 export function Header({
@@ -48,6 +50,7 @@ export function Header({
   currentUser,
   onOpenAuth,
   onLogout,
+  onOpenLlmProfile,
 }: HeaderProps) {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between gap-4 select-none shrink-0 z-20">
@@ -98,16 +101,16 @@ export function Header({
           </button>
         )}
 
-        {/* Integrations & Accounts Button */}
+        {/* Setup & Integrations Button */}
         {onOpenIntegrations && (
           <button
             type="button"
             onClick={onOpenIntegrations}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all bg-zinc-900/90 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900"
-            title="Manage Connected GitHub & Google Workspace Accounts"
+            title="Setup & Integrations: GitHub, Google Workspace, and Project Workspace Directory"
           >
             <Zap className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="hidden sm:inline text-[11px]">Integrations</span>
+            <span className="hidden sm:inline text-[11px]">Setup & Integrations</span>
           </button>
         )}
 
@@ -134,10 +137,24 @@ export function Header({
           </button>
         )}
 
+        {/* LLM Profile & Provider Keys Button */}
+        {onOpenLlmProfile && (
+          <button
+            type="button"
+            onClick={onOpenLlmProfile}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all bg-zinc-900/90 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-indigo-400"
+            title="Configure LLM API Keys and Local Inference Endpoints"
+          >
+            <Key className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline text-[11px]">API Keys</span>
+          </button>
+        )}
+
         {/* Model Selector */}
         <ModelSelector
           selectedModelId={selectedModelId}
           onModelSelect={onModelSelect}
+          onOpenKeySettings={onOpenLlmProfile}
         />
 
         {/* Dynamic Backend Status indicator */}

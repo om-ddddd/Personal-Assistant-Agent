@@ -51,7 +51,7 @@ interface ThreadProps {
 }
 
 export function Thread({
-  activeModelName = "Groq (openai/gpt-oss-120b)",
+  activeModelName = "Ollama (qwen3:8b)",
   threadId = "",
   onStreamComplete,
 }: ThreadProps) {

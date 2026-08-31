@@ -14,14 +14,31 @@ import {
   getThreadHistory,
   getCompiledAgent,
   getActiveTools,
+  resetCompiledAgent,
 } from "./agent.js";
-import { closeMcpClient } from "./mcp/client.js";
+import { closeMcpClient, getDefaultWorkspaceRoot } from "./mcp/client.js";
 import {
   getGoogleOAuthUrl,
   handleGoogleOAuthCallback,
   getGoogleAuthStatus,
   clearStoredGoogleTokens,
 } from "./tools/google-workspace.js";
+import {
+  getWorkspacePath,
+  setWorkspacePath,
+  clearWorkspacePath,
+  getMaskedUserLlmKeys,
+  saveUserLlmKeys,
+  clearUserLlmKeys,
+  getUserLlmKeys,
+} from "./settings/user-settings.js";
+import fs from "fs/promises";
+import {
+  listAllAvailableModels,
+  checkOllamaHealth,
+  testModelConnection,
+  pullOllamaModel,
+} from "./models.js";
 
 // Permission system imports
 import { checkPermission, listRegisteredTools, getRegistrySummary } from "./permissions/registry.js";
@@ -140,26 +157,18 @@ export function createServer() {
 
   app.get("/api/auth/google/callback", async (req: Request, res: Response) => {
     const code = req.query.code as string;
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
     if (!code) {
-      return res.status(400).send("Missing OAuth authorization code in query.");
+      return res.status(400).redirect(`${frontendUrl}?google_auth=error&message=Missing_authorization_code`);
     }
 
     try {
       await handleGoogleOAuthCallback(code);
-      return res.send(`
-        <html>
-          <body style="font-family: sans-serif; background: #09090b; color: #fafafa; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
-            <div style="text-align: center; padding: 2rem; border: 1px solid #27272a; border-radius: 12px; background: #18181b;">
-              <h2 style="color: #10b981; margin-bottom: 0.5rem;">Google Workspace Connected Successfully</h2>
-              <p style="color: #a1a1aa; font-size: 14px;">Your Personal Assistant Agent can now manage your Google Calendar and Gmail.</p>
-              <button onclick="window.close()" style="margin-top: 1rem; padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer;">Close Window</button>
-            </div>
-          </body>
-        </html>
-      `);
+      return res.redirect(`${frontendUrl}?google_auth=success`);
     } catch (err: unknown) {
       const error = err as Error;
-      return res.status(500).send(`OAuth authorization failed: ${error.message}`);
+      return res.redirect(`${frontendUrl}?google_auth=error&message=${encodeURIComponent(error.message)}`);
     }
   });
 
@@ -167,6 +176,39 @@ export function createServer() {
   app.get("/api/tools", (_req: Request, res: Response) => {
     const tools = getActiveTools();
     return res.json({ tools, total: tools.length });
+  });
+
+  // =========================================================================
+  //                        MODEL DISCOVERY ENDPOINTS
+  // =========================================================================
+
+  /**
+   * GET /api/models
+   * Dynamically returns all available models (local detected Ollama models + cloud providers).
+   */
+  app.get("/api/models", async (_req: Request, res: Response) => {
+    try {
+      const catalog = await listAllAvailableModels();
+      return res.json(catalog);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to retrieve models catalog." });
+    }
+  });
+
+  /**
+   * GET /api/models/ollama/status
+   * Check Ollama connectivity and installed local models.
+   */
+  app.get("/api/models/ollama/status", async (req: Request, res: Response) => {
+    try {
+      const baseUrl = req.query.baseUrl as string | undefined;
+      const status = await checkOllamaHealth(baseUrl);
+      return res.json(status);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ isOnline: false, error: error.message || "Failed to query Ollama status." });
+    }
   });
 
   // =========================================================================
@@ -620,6 +662,264 @@ export function createServer() {
   });
 
   // =========================================================================
+  //                       USER WORKSPACE SETTINGS
+  // =========================================================================
+
+  /**
+   * GET /api/settings/workspace
+   * Returns the current workspace path for the authenticated user.
+   */
+  app.get("/api/settings/workspace", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required to access workspace settings." });
+    }
+
+    try {
+      const savedPath = await getWorkspacePath(userId);
+      const defaultPath = getDefaultWorkspaceRoot();
+      return res.json({
+        workspacePath: savedPath,
+        defaultPath,
+        isDefault: !savedPath,
+        effectivePath: savedPath || defaultPath,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to fetch workspace settings." });
+    }
+  });
+
+  /**
+   * POST /api/settings/workspace
+   * Update the workspace path for the authenticated user.
+   * Body: { workspacePath: string } or { reset: true } to revert to default.
+   */
+  app.post("/api/settings/workspace", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required to update workspace settings." });
+    }
+
+    const { workspacePath, reset } = req.body || {};
+
+    // Handle reset to default
+    if (reset === true) {
+      try {
+        await clearWorkspacePath(userId);
+        resetCompiledAgent();
+        return res.json({
+          success: true,
+          workspacePath: null,
+          effectivePath: getDefaultWorkspaceRoot(),
+          isDefault: true,
+          message: "Workspace reset to system default.",
+        });
+      } catch (err: any) {
+        return res.status(500).json({ error: err.message || "Failed to reset workspace path." });
+      }
+    }
+
+    if (!workspacePath || typeof workspacePath !== "string" || !workspacePath.trim()) {
+      return res.status(400).json({ error: "'workspacePath' must be a non-empty string." });
+    }
+
+    // 1. Sanitize raw input: strip surrounding double/single quotes and whitespace
+    let cleanPath = workspacePath.trim().replace(/^["']+|["']+$/g, "").trim();
+
+    // Auto-fix ":\..." or ":/..." pasted accidentally without drive letter
+    if (cleanPath.startsWith(":\\") || cleanPath.startsWith(":/")) {
+      cleanPath = "C" + cleanPath;
+    }
+
+    // 2. Resolve candidate filesystem paths (handling Windows host paths inside Linux Docker container)
+    const candidates: string[] = [cleanPath];
+
+    if (process.platform !== "win32") {
+      const normalized = cleanPath.replace(/\\/g, "/");
+
+      // Case: inside the project repo
+      if (normalized.toLowerCase().includes("personal assistant agent")) {
+        candidates.push("/workspace");
+      }
+
+      // Case: C:/... mapped to /host_c/... in Docker container
+      const cDriveMatch = normalized.match(/^[a-zA-Z]:\/(.*)$/i);
+      if (cDriveMatch) {
+        candidates.push(`/host_c/${cDriveMatch[1]}`);
+      }
+
+      // Case: Desktop/Coding mapped to /host_projects in Docker container
+      const codingMatch = normalized.match(/^[a-zA-Z]:\/Users\/[^\/]+\/Desktop\/Coding(\/.*)?$/i);
+      if (codingMatch) {
+        candidates.push(`/host_projects${codingMatch[1] || ""}`);
+      }
+    }
+
+    let verifiedPath: string | null = null;
+    for (const cand of candidates) {
+      try {
+        const stat = await fs.stat(cand);
+        if (stat.isDirectory()) {
+          verifiedPath = cand;
+          break;
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+
+    if (!verifiedPath) {
+      return res.status(400).json({
+        error: `Directory does not exist: "${cleanPath}". Please enter a valid directory path.`,
+      });
+    }
+
+    try {
+      await setWorkspacePath(userId, verifiedPath);
+      // Force agent to rebuild with the new workspace root on next invocation
+      resetCompiledAgent();
+      return res.json({
+        success: true,
+        workspacePath: cleanPath,
+        effectivePath: verifiedPath,
+        isDefault: false,
+        message: "Workspace path updated successfully.",
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to save workspace path." });
+    }
+  });
+
+  // =========================================================================
+  //                       USER LLM PROFILE & KEYS ENDPOINTS
+  // =========================================================================
+
+  /**
+   * GET /api/settings/llm-keys
+   * Retrieve masked user LLM profile keys and server defaults.
+   */
+  app.get("/api/settings/llm-keys", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    try {
+      const keys = await getMaskedUserLlmKeys(userId || "anonymous");
+      return res.json(keys);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to fetch LLM profile keys." });
+    }
+  });
+
+  /**
+   * POST /api/settings/llm-keys
+   * Persist user's custom LLM profile keys and preferences.
+   */
+  app.post("/api/settings/llm-keys", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required to update LLM profile keys." });
+    }
+    try {
+      await saveUserLlmKeys(userId, req.body || {});
+      const masked = await getMaskedUserLlmKeys(userId);
+      return res.json({ success: true, message: "LLM profile updated successfully.", keys: masked });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to save LLM profile keys." });
+    }
+  });
+
+  /**
+   * DELETE /api/settings/llm-keys
+   * Clear user custom keys, reverting to server environment defaults.
+   */
+  app.delete("/api/settings/llm-keys", async (req: Request, res: Response) => {
+    const userId = extractUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required to clear LLM profile keys." });
+    }
+    try {
+      await clearUserLlmKeys(userId);
+      const masked = await getMaskedUserLlmKeys(userId);
+      return res.json({ success: true, message: "LLM profile reset to server defaults.", keys: masked });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to reset LLM profile keys." });
+    }
+  });
+
+  /**
+   * POST /api/settings/llm-keys/test
+   * Test connectivity and authentication for a specific LLM provider.
+   */
+  app.post("/api/settings/llm-keys/test", async (req: Request, res: Response) => {
+    const { provider, apiKey, baseUrl, modelName } = req.body || {};
+    if (!provider) {
+      return res.status(400).json({ error: "provider is required." });
+    }
+    try {
+      const result = await testModelConnection(provider, { apiKey, baseUrl, modelName });
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message || "Failed to test provider." });
+    }
+  });
+
+  // =========================================================================
+  //                       MODEL CATALOG & OLLAMA ENDPOINTS
+  // =========================================================================
+
+  /**
+   * GET /api/models
+   * Dynamically lists all local Ollama models (live detected) and cloud models with configured status.
+   */
+  app.get("/api/models", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const userKeys = userId ? await getUserLlmKeys(userId) : {};
+      const result = await listAllAvailableModels(userKeys);
+      return res.json(result);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to list models" });
+    }
+  });
+
+  /**
+   * GET /api/models/ollama/status
+   * Direct connectivity test to Ollama instance.
+   */
+  app.get("/api/models/ollama/status", async (req: Request, res: Response) => {
+    try {
+      const userId = extractUserIdFromReq(req);
+      const userKeys = userId ? await getUserLlmKeys(userId) : {};
+      const baseUrl = (req.query.baseUrl as string) || userKeys.ollamaBaseUrl || process.env.OLLAMA_BASE_URL;
+      const status = await checkOllamaHealth(baseUrl);
+      return res.json(status);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to check Ollama status" });
+    }
+  });
+
+  /**
+   * POST /api/models/ollama/pull
+   * Pull an Ollama model directly into the local Ollama instance.
+   */
+  app.post("/api/models/ollama/pull", async (req: Request, res: Response) => {
+    try {
+      const { model } = req.body || {};
+      if (!model || typeof model !== "string") {
+        return res.status(400).json({ error: "Missing or invalid 'model' parameter." });
+      }
+      const userId = extractUserIdFromReq(req);
+      const userKeys = userId ? await getUserLlmKeys(userId) : {};
+      const baseUrl = userKeys.ollamaBaseUrl || process.env.OLLAMA_BASE_URL;
+      const result = await pullOllamaModel(model, baseUrl);
+      return res.json(result);
+    } catch (err: unknown) {
+      const error = err as Error;
+      return res.status(500).json({ error: error.message || "Failed to pull model" });
+    }
+  });
+
+  // =========================================================================
   //                            CHAT ENDPOINTS
   // =========================================================================
 
@@ -627,13 +927,16 @@ export function createServer() {
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
       const userId = extractUserIdFromReq(req);
-      const { message, threadId = "default-session" } = req.body;
+      const { message, threadId = "default-session", modelId } = req.body;
 
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Missing or invalid 'message' field in request body." });
       }
 
-      const result = await invokeAgent(message, threadId, userId);
+      // Resolve user's configured workspace path (falls back to system default if not set)
+      const userWorkspacePath = userId ? (await getWorkspacePath(userId)) ?? undefined : undefined;
+      const userKeys = userId ? await getUserLlmKeys(userId) : {};
+      const result = await invokeAgent(message, threadId, userId, userWorkspacePath, modelId, userKeys);
 
       // Check if the graph was interrupted for HITL confirmation
       const interruptState = await getThreadInterruptState(threadId);
@@ -684,7 +987,7 @@ export function createServer() {
   // Real-time SSE token streaming endpoint
   app.post("/api/chat/stream", async (req: Request, res: Response) => {
     const userId = extractUserIdFromReq(req);
-    const { message, threadId = "default-session" } = req.body;
+    const { message, threadId = "default-session", modelId } = req.body;
 
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Missing or invalid 'message' field in request body." });
@@ -697,8 +1000,12 @@ export function createServer() {
       (res as any).flushHeaders();
     }
 
+    // Resolve user's configured workspace path (falls back to system default if not set)
+    const userWorkspacePath = userId ? (await getWorkspacePath(userId)) ?? undefined : undefined;
+    const userKeys = userId ? await getUserLlmKeys(userId) : {};
+
     try {
-      for await (const event of streamAgentEvents(message, threadId, userId)) {
+      for await (const event of streamAgentEvents(message, threadId, userId, userWorkspacePath, modelId, userKeys)) {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
 

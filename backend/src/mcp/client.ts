@@ -7,10 +7,11 @@ import dotenv from "dotenv";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const backendDir = path.resolve(__dirname, "..");
-const workspaceRootDir = path.resolve(backendDir, "..");
 
 // Always load .env from backend/.env
 dotenv.config({ path: path.join(backendDir, ".env") });
+
+const workspaceRootDir = process.env.WORKSPACE_ROOT || path.resolve(backendDir, "..");
 
 import { getGitHubAccessToken } from "../auth/github-oauth.js";
 
@@ -18,23 +19,50 @@ let mcpClientInstance: MultiServerMCPClient | null = null;
 let loadedMcpTools: DynamicStructuredTool[] = [];
 
 /**
- * Get the allowed root directory for the Filesystem MCP Server
+ * The workspace root that the current MCP client instance was initialized with.
+ * Used to detect when a reinitialize is needed.
  */
-export function getWorkspaceRoot(): string {
+let currentMcpWorkspaceRoot: string = workspaceRootDir;
+
+/**
+ * Get the system-level default workspace root (the project root directory).
+ * Used as the fallback when a user has not set a custom workspace path.
+ */
+export function getDefaultWorkspaceRoot(): string {
   return workspaceRootDir;
 }
 
 /**
- * Initializes MultiServerMCPClient with Filesystem MCP and GitHub MCP servers
+ * Initializes MultiServerMCPClient with Filesystem MCP and (optionally) GitHub MCP servers.
+ *
+ * @param workspaceRoot - The root directory to expose to the Filesystem MCP server.
+ *   Defaults to the project root. Pass a user-specific path to scope the agent's
+ *   file access per user. If the root differs from the previous instance, the
+ *   existing client is torn down and rebuilt automatically.
  */
-export async function initializeMcpClient(): Promise<DynamicStructuredTool[]> {
-  if (mcpClientInstance && loadedMcpTools.length > 0) {
+export async function initializeMcpClient(
+  workspaceRoot: string = workspaceRootDir
+): Promise<DynamicStructuredTool[]> {
+  // If an instance already exists and the workspace root hasn't changed, reuse it
+  if (mcpClientInstance && loadedMcpTools.length > 0 && currentMcpWorkspaceRoot === workspaceRoot) {
     return loadedMcpTools;
   }
 
-  const workspaceRoot = getWorkspaceRoot();
-  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  // Tear down stale instance if root changed
+  if (mcpClientInstance && currentMcpWorkspaceRoot !== workspaceRoot) {
+    try {
+      await mcpClientInstance.close();
+      console.log(`[MCP] Closed previous MCP client (root: ${currentMcpWorkspaceRoot}).`);
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.warn("[MCP] Error closing previous MCP client:", error.message);
+    }
+    mcpClientInstance = null;
+    loadedMcpTools = [];
+  }
 
+  currentMcpWorkspaceRoot = workspaceRoot;
+  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   const githubToken = (await getGitHubAccessToken()) || "";
 
   const serverConfigs: Record<string, any> = {
@@ -62,14 +90,11 @@ export async function initializeMcpClient(): Promise<DynamicStructuredTool[]> {
     console.log(`[MCP] Connecting to MCP servers (Scoped root: ${workspaceRoot})...`);
     mcpClientInstance = new MultiServerMCPClient(serverConfigs);
 
-    // Load and adapt tools into LangChain DynamicStructuredTools
     const tools = await mcpClientInstance.getTools();
     loadedMcpTools = tools;
 
     console.log(
-      `[MCP] Successfully loaded ${tools.length} MCP tools: ${tools
-        .map((t) => t.name)
-        .join(", ")}`
+      `[MCP] Successfully loaded ${tools.length} MCP tools: ${tools.map((t) => t.name).join(", ")}`
     );
 
     return loadedMcpTools;
@@ -82,26 +107,34 @@ export async function initializeMcpClient(): Promise<DynamicStructuredTool[]> {
 }
 
 /**
- * Returns currently loaded MCP tools
+ * Returns currently loaded MCP tools.
  */
 export function getLoadedMcpTools(): DynamicStructuredTool[] {
   return loadedMcpTools;
 }
 
 /**
- * Gracefully close active MCP client connections
+ * Force close the active MCP client and clear cached tools.
+ * The next call to initializeMcpClient() will reinitialize from scratch.
  */
-export async function closeMcpClient(): Promise<void> {
+export async function resetMcpClient(): Promise<void> {
   if (mcpClientInstance) {
     try {
       await mcpClientInstance.close();
-      console.log("[MCP] MCP client connections closed.");
+      console.log("[MCP] MCP client reset — will reinitialize on next call.");
     } catch (err: unknown) {
       const error = err as Error;
-      console.error("[MCP] Error closing MCP connections:", error.message);
+      console.error("[MCP] Error during reset:", error.message);
     } finally {
       mcpClientInstance = null;
       loadedMcpTools = [];
     }
   }
+}
+
+/**
+ * Gracefully close active MCP client connections.
+ */
+export async function closeMcpClient(): Promise<void> {
+  await resetMcpClient();
 }

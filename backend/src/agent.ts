@@ -10,7 +10,7 @@ import {
 } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
-import { model } from "./models.js";
+import { model, getModel } from "./models.js";
 import { basicTools } from "./tools/basic.js";
 import { googleWorkspaceTools } from "./tools/google-workspace.js";
 import { memoryTools } from "./tools/memory-tools.js";
@@ -240,12 +240,16 @@ export async function deleteThread(id: string, userId?: string | null): Promise<
 
   if (isDatabaseConnected()) {
     try {
-      await prisma.thread.delete({ where: { id } });
+      await prisma.thread.deleteMany({ where: { id } });
+      await (prisma as any).checkpoint_blobs?.deleteMany?.({ where: { thread_id: id } }).catch(() => {});
+      await (prisma as any).checkpoint_writes?.deleteMany?.({ where: { thread_id: id } }).catch(() => {});
+      await (prisma as any).checkpoints?.deleteMany?.({ where: { thread_id: id } }).catch(() => {});
     } catch {
       // ignore
     }
   }
-  return threadStore.delete(id);
+  threadStore.delete(id);
+  return true;
 }
 
 /**
@@ -335,6 +339,7 @@ export function touchThread(id: string, prompt?: string, userId?: string | null)
 export const checkpointer = getCheckpointer();
 
 let compiledAgentInstance: any = null;
+let compiledAgentWorkspaceRoot: string | null = null;
 let activeToolsList: any[] = [...basicTools, ...googleWorkspaceTools];
 
 function formatToolForModel(tool: any) {
@@ -386,16 +391,36 @@ export const AgentStateAnnotation = Annotation.Root({
 });
 
 /**
+ * Reset the compiled agent singleton so it will be rebuilt on the next call.
+ * Called when a user's workspace path changes so MCP tools reinitialize with the new root.
+ */
+export function resetCompiledAgent(): void {
+  compiledAgentInstance = null;
+  compiledAgentWorkspaceRoot = null;
+  console.log("[Agent] Compiled agent reset — will reinitialize on next invocation.");
+}
+
+/**
  * Builds or retrieves the compiled LangGraph agent with permission-gated tool execution,
  * short-term memory (trimming & progressive summarization), and long-term memory (pgvector).
+ *
+ * @param workspaceRoot - The filesystem root the Filesystem MCP server is scoped to.
+ *   Defaults to the system project root. When a user-specific path is passed, the
+ *   agent instance is rebuilt if the root differs from the current one.
  */
-export async function getCompiledAgent() {
+export async function getCompiledAgent(workspaceRoot?: string) {
+  // If a workspace root is provided and differs from the current instance, force rebuild
+  if (compiledAgentInstance && workspaceRoot && workspaceRoot !== compiledAgentWorkspaceRoot) {
+    compiledAgentInstance = null;
+    compiledAgentWorkspaceRoot = null;
+  }
+
   if (compiledAgentInstance) {
     return compiledAgentInstance;
   }
 
   // Load MCP tools from Filesystem MCP / GitHub MCP servers
-  const mcpTools = await initializeMcpClient();
+  const mcpTools = await initializeMcpClient(workspaceRoot);
   const jobTools = [
     startBackgroundRepoAnalysisTool,
     checkBackgroundJobStatusTool,
@@ -431,10 +456,6 @@ export async function getCompiledAgent() {
   );
 
   const formattedTools = activeToolsList.map(formatToolForModel);
-  const modelWithTools = (typeof (model as any).bind === "function")
-    ? (model as any).bind({ tools: formattedTools })
-    : model.bindTools(activeToolsList);
-
   const toolNode = new ToolNode(activeToolsList);
 
   /**
@@ -457,7 +478,7 @@ export async function getCompiledAgent() {
         }
         if (isDatabaseConnected()) {
           prisma.thread
-            .update({
+            .updateMany({
               where: { id: threadId },
               data: { summary: currentSummary },
             })
@@ -488,7 +509,7 @@ export async function getCompiledAgent() {
     };
   }
 
-  async function callModel(state: typeof AgentStateAnnotation.State) {
+  async function callModel(state: typeof AgentStateAnnotation.State, config?: any) {
     const currentLoop = (state.loopCount || 0) + 1;
 
     // Runaway loop guard: if loop limit reached, stop and return explanation
@@ -520,7 +541,46 @@ export async function getCompiledAgent() {
       ...trimmedMessages,
     ];
 
-    const response = await modelWithTools.invoke(messagesWithSystem);
+    const requestedModelId = config?.configurable?.modelId || "default";
+    const userKeys = config?.configurable?.userKeys || {};
+
+    let apiKeyOverride: string | undefined;
+    let baseUrlOverride: string | undefined;
+
+    if (requestedModelId.startsWith("groq")) apiKeyOverride = userKeys.groqApiKey;
+    else if (requestedModelId.startsWith("openai")) apiKeyOverride = userKeys.openaiApiKey;
+    else if (requestedModelId.startsWith("anthropic")) apiKeyOverride = userKeys.anthropicApiKey;
+    else if (requestedModelId.startsWith("google")) apiKeyOverride = userKeys.googleApiKey;
+    else if (requestedModelId.startsWith("nvidia")) {
+      apiKeyOverride = userKeys.nvidiaApiKey;
+      baseUrlOverride = userKeys.nvidiaBaseUrl;
+    } else if (requestedModelId.startsWith("ollama")) {
+      baseUrlOverride = userKeys.ollamaBaseUrl;
+    } else if (requestedModelId.startsWith("lmstudio")) {
+      baseUrlOverride = userKeys.lmstudioBaseUrl;
+    }
+
+    let activeChatModel: any;
+    try {
+      activeChatModel = getModel(requestedModelId, {
+        apiKey: apiKeyOverride,
+        baseUrl: baseUrlOverride,
+      });
+    } catch (err: any) {
+      console.warn(`[Agent] Could not load model "${requestedModelId}": ${err.message}. Falling back to default.`);
+      activeChatModel = model;
+    }
+
+    let boundModel: any;
+    if (typeof activeChatModel.bind === "function") {
+      boundModel = activeChatModel.bind({ tools: formattedTools });
+    } else if (typeof activeChatModel.bindTools === "function") {
+      boundModel = activeChatModel.bindTools(activeToolsList);
+    } else {
+      boundModel = activeChatModel;
+    }
+
+    const response = await boundModel.invoke(messagesWithSystem);
     if (typeof response.content === "string") {
       response.content = stripEchoedSummary(response.content, state.summary);
     }
@@ -733,6 +793,7 @@ export async function getCompiledAgent() {
   compiledAgentInstance = workflow.compile({
     checkpointer: checkpointerInstance,
   });
+  compiledAgentWorkspaceRoot = workspaceRoot ?? null;
   saveGraphImage(compiledAgentInstance, 'workflow.png')
   return compiledAgentInstance;
 }
@@ -902,12 +963,17 @@ export async function getThreadHistory(threadId: string) {
 export async function invokeAgent(
   prompt: string,
   threadId: string = "default-thread",
-  userId?: string | null
+  userId?: string | null,
+  workspaceRoot?: string,
+  modelId?: string,
+  userKeys?: any
 ) {
-  const agentInstance = await getCompiledAgent();
+  const agentInstance = await getCompiledAgent(workspaceRoot);
   const config = {
     configurable: {
       thread_id: threadId,
+      modelId: modelId || "default",
+      userKeys: userKeys || {},
     },
   };
 
@@ -1065,12 +1131,17 @@ class StreamTokenSanitizer {
 export async function* streamAgentEvents(
   prompt: string,
   threadId: string = "default-thread",
-  userId?: string | null
+  userId?: string | null,
+  workspaceRoot?: string,
+  modelId?: string,
+  userKeys?: any
 ) {
-  const agentInstance = await getCompiledAgent();
+  const agentInstance = await getCompiledAgent(workspaceRoot);
   const config = {
     configurable: {
       thread_id: threadId,
+      modelId: modelId || "default",
+      userKeys: userKeys || {},
     },
   };
 

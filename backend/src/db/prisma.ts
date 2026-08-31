@@ -44,6 +44,19 @@ export async function checkDatabaseConnection(): Promise<boolean> {
       await client.$executeRawUnsafe(`
         ALTER TABLE threads ADD COLUMN IF NOT EXISTS "userId" TEXT;
       `);
+      await client.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS user_settings (
+          id TEXT PRIMARY KEY,
+          "userId" TEXT UNIQUE NOT NULL,
+          "workspacePath" TEXT,
+          "llmKeys" JSONB,
+          "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+      await client.$executeRawUnsafe(`
+        ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS "llmKeys" JSONB;
+      `);
     } catch {
       // ignore table sync warning
     }

@@ -18,7 +18,13 @@ dist/
 # Environment variables & Tokens
 .env*.local
 .env
+.env.*
 .google-tokens.json
+.github-tokens.json
+*-tokens.json
+.*-tokens.json
+*.token.json
+
 
 # Debug logs
 npm-debug.log*

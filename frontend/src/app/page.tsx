@@ -6,10 +6,12 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { Thread } from "@/components/assistant-ui/thread";
 import { PermissionManagerModal } from "@/components/permissions/permission-manager-modal";
-import { IntegrationsModal } from "@/components/auth/integrations-modal";
+import { SetupGateModal } from "@/components/auth/setup-gate-modal";
 import { UserAuthModal } from "@/components/auth/user-auth-modal";
+import { LlmProfileModal } from "@/components/settings/llm-profile-modal";
 import { JobsDrawer } from "@/components/jobs/jobs-drawer";
 import { fetchUserJobs } from "@/lib/jobs-client";
+import { fetchGitHubStatus, fetchGoogleStatus } from "@/lib/auth-api";
 import { ModelOption, AVAILABLE_MODELS } from "@/components/assistant-ui/model-selector";
 import { cn } from "@/lib/utils";
 import {
@@ -25,6 +27,7 @@ import {
   deleteThreadOnBackend,
   fetchPendingConfirmations,
   checkThreadInterrupt,
+  fetchWorkspaceSettings,
   ThreadSession,
 } from "@/lib/agent-runtime";
 import {
@@ -44,12 +47,16 @@ import {
 
 interface ActiveChatProps {
   threadId: string;
+  selectedModelId?: string;
+  selectedModelName?: string;
   onStreamComplete: () => void;
   onHealthStatusChange?: (healthy: boolean | null) => void;
 }
 
 function ActiveChatSession({
   threadId,
+  selectedModelId,
+  selectedModelName,
   onStreamComplete,
   onHealthStatusChange,
 }: ActiveChatProps) {
@@ -115,6 +122,8 @@ function ActiveChatSession({
   return (
     <ActiveChatSessionInner
       threadId={threadId}
+      selectedModelId={selectedModelId}
+      selectedModelName={selectedModelName}
       initialMessages={initialMessages}
       onStreamComplete={onStreamComplete}
       onHealthStatusChange={onHealthStatusChange}
@@ -124,17 +133,22 @@ function ActiveChatSession({
 
 function ActiveChatSessionInner({
   threadId,
+  selectedModelId,
+  selectedModelName,
   initialMessages,
   onStreamComplete,
   onHealthStatusChange,
 }: {
   threadId: string;
+  selectedModelId?: string;
+  selectedModelName?: string;
   initialMessages: ThreadMessageLike[];
   onStreamComplete: () => void;
   onHealthStatusChange?: (healthy: boolean | null) => void;
 }) {
   const { runtime, isBackendHealthy } = useBackendRuntime({
     threadId,
+    modelId: selectedModelId,
     initialMessages,
     onStreamComplete,
   });
@@ -146,7 +160,7 @@ function ActiveChatSessionInner({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Thread
-        activeModelName="NVIDIA Nemotron / Groq"
+        activeModelName={selectedModelName || "Ollama / Cloud"}
         threadId={threadId}
         onStreamComplete={onStreamComplete}
       />
@@ -161,10 +175,18 @@ function StartConversationHero({
   onStartNew,
   isCreating,
   onOpenPermissionManager,
+  currentUser,
+  onOpenAuth,
+  isSetupComplete,
+  onOpenSetup,
 }: {
   onStartNew: () => void;
   isCreating: boolean;
   onOpenPermissionManager: () => void;
+  currentUser: UserProfile | null;
+  onOpenAuth: () => void;
+  isSetupComplete: boolean;
+  onOpenSetup: () => void;
 }) {
   return (
     <div className="h-full w-full flex flex-col items-center justify-center p-6 text-center select-none bg-radial-glow overflow-y-auto">
@@ -189,20 +211,39 @@ function StartConversationHero({
           </p>
         </div>
 
-        {/* Primary Start Conversation Action */}
-        <button
-          type="button"
-          onClick={onStartNew}
-          disabled={isCreating}
-          className="group relative flex items-center gap-2.5 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-950/80 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
-        >
-          {isCreating ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Plus className="w-4 h-4 text-indigo-200 group-hover:rotate-90 transition-transform duration-200" />
-          )}
-          <span>Start New Conversation</span>
-        </button>
+        {/* Primary Action */}
+        {!currentUser ? (
+          <button
+            type="button"
+            onClick={onOpenAuth}
+            className="group relative flex items-center gap-2.5 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold shadow-lg shadow-blue-950/80 transition-all hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <span>Sign In to Get Started</span>
+          </button>
+        ) : !isSetupComplete ? (
+          <button
+            type="button"
+            onClick={onOpenSetup}
+            className="group relative flex items-center gap-2.5 px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold shadow-lg shadow-amber-950/80 transition-all hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <Zap className="w-4 h-4 text-amber-200 animate-pulse" />
+            <span>Complete 3 Required Setup Steps</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onStartNew}
+            disabled={isCreating}
+            className="group relative flex items-center gap-2.5 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-950/80 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
+          >
+            {isCreating ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Plus className="w-4 h-4 text-indigo-200 group-hover:rotate-90 transition-transform duration-200" />
+            )}
+            <span>Start New Conversation</span>
+          </button>
+        )}
 
         {/* Capability Feature Cards */}
         <div className="grid grid-cols-2 gap-2.5 w-full pt-4 text-left">
@@ -247,8 +288,10 @@ export default function Home() {
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
-  const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
+  const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
+  const [isSetupComplete, setIsSetupComplete] = useState(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isLlmProfileModalOpen, setIsLlmProfileModalOpen] = useState(false);
   const [isJobsDrawerOpen, setIsJobsDrawerOpen] = useState(false);
   const [activeJobsCount, setActiveJobsCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -258,18 +301,51 @@ export default function Home() {
     message: string;
   } | null>(null);
 
-  // Load active user session on startup
+  // Check 3 mandatory prerequisites
+  const checkSetupStatus = useCallback(async () => {
+    try {
+      const [gh, ggl, ws] = await Promise.all([
+        fetchGitHubStatus(),
+        fetchGoogleStatus(),
+        fetchWorkspaceSettings(),
+      ]);
+
+      const ghOk = gh.connected;
+      const gglOk = ggl.configured && ggl.mode === "live";
+      const wsOk =
+        ws !== null &&
+        ws.workspacePath !== null &&
+        ws.workspacePath.trim().length > 0;
+
+      const allOk = ghOk && gglOk && wsOk;
+      setIsSetupComplete(allOk);
+      if (!allOk) {
+        setIsSetupModalOpen(true);
+      }
+      return allOk;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Load active user session on startup, then check setup
   useEffect(() => {
     apiGetMe().then((user) => {
       if (user) {
         setCurrentUser(user);
+        checkSetupStatus();
+      } else {
+        setCurrentUser(null);
+        setIsAuthModalOpen(true);
       }
     });
-  }, []);
+  }, [checkSetupStatus]);
 
   const handleLogout = async () => {
     await apiLogout();
     setCurrentUser(null);
+    setIsSetupModalOpen(false);
+    setIsAuthModalOpen(true);
     if (typeof window !== "undefined") {
       localStorage.removeItem("last_active_thread_id");
     }
@@ -291,6 +367,7 @@ export default function Home() {
         type: "success",
         message: `GitHub account connected successfully! ${username ? `(@${username})` : ""}`,
       });
+      checkSetupStatus();
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (ghAuth === "error") {
       setAuthNotification({
@@ -303,6 +380,7 @@ export default function Home() {
         type: "success",
         message: "Google Workspace (Calendar & Gmail) connected successfully!",
       });
+      checkSetupStatus();
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (gglAuth === "error") {
       setAuthNotification({
@@ -311,7 +389,7 @@ export default function Home() {
       });
       window.history.replaceState({}, document.title, window.location.pathname);
     }
-  }, []);
+  }, [checkSetupStatus]);
 
   // Poll pending confirmations count
   const refreshPendingCount = useCallback(async () => {
@@ -412,6 +490,16 @@ export default function Home() {
   };
 
   const handleStartNewSession = async () => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!isSetupComplete) {
+      setIsSetupModalOpen(true);
+      return;
+    }
+
     if (activeSession && activeSession.messageCount === 0) {
       return;
     }
@@ -464,7 +552,7 @@ export default function Home() {
         isNewSessionDisabled={activeSession ? activeSession.messageCount === 0 : false}
         onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
         pendingConfirmationsCount={pendingConfirmationsCount}
-        onOpenIntegrations={() => setIsIntegrationsOpen(true)}
+        onOpenIntegrations={() => setIsSetupModalOpen(true)}
         currentUser={currentUser}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onLogout={handleLogout}
@@ -482,12 +570,13 @@ export default function Home() {
           isBackendHealthy={isBackendHealthy}
           onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
           pendingConfirmationsCount={pendingConfirmationsCount}
-          onOpenIntegrations={() => setIsIntegrationsOpen(true)}
+          onOpenIntegrations={() => setIsSetupModalOpen(true)}
           onOpenJobsDrawer={() => setIsJobsDrawerOpen(true)}
           activeJobsCount={activeJobsCount}
           currentUser={currentUser}
           onOpenAuth={() => setIsAuthModalOpen(true)}
           onLogout={handleLogout}
+          onOpenLlmProfile={() => setIsLlmProfileModalOpen(true)}
         />
 
         {/* OAuth Notification Banner */}
@@ -525,10 +614,12 @@ export default function Home() {
               <Loader2 className="w-5 h-5 animate-spin text-indigo-400" />
               <span>Loading workspace...</span>
             </div>
-          ) : activeSessionId ? (
+          ) : activeSessionId && isSetupComplete ? (
             <ActiveChatSession
-              key={activeSessionId}
+              key={`${activeSessionId}-${selectedModel?.id || "default"}`}
               threadId={activeSessionId}
+              selectedModelId={selectedModel?.id}
+              selectedModelName={selectedModel?.name}
               onStreamComplete={refreshSessions}
               onHealthStatusChange={setIsBackendHealthy}
             />
@@ -537,6 +628,10 @@ export default function Home() {
               onStartNew={handleStartNewSession}
               isCreating={isCreatingSession}
               onOpenPermissionManager={() => setIsPermissionModalOpen(true)}
+              currentUser={currentUser}
+              onOpenAuth={() => setIsAuthModalOpen(true)}
+              isSetupComplete={isSetupComplete}
+              onOpenSetup={() => setIsSetupModalOpen(true)}
             />
           )}
         </main>
@@ -558,11 +653,12 @@ export default function Home() {
         onRefreshThreads={refreshSessions}
       />
 
-      {/* Connected Accounts & Integrations Modal */}
-      <IntegrationsModal
-        isOpen={isIntegrationsOpen}
-        onClose={() => setIsIntegrationsOpen(false)}
-        onStatusChange={refreshSessions}
+      {/* Mandatory 3-Step Setup Gate & Integrations Modal */}
+      <SetupGateModal
+        isOpen={isSetupModalOpen}
+        onClose={() => setIsSetupModalOpen(false)}
+        onSetupComplete={checkSetupStatus}
+        forceGate={!isSetupComplete}
       />
 
       {/* User Login / Sign Up Modal */}
@@ -571,10 +667,20 @@ export default function Home() {
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={(user) => {
           setCurrentUser(user);
+          checkSetupStatus();
           setAuthNotification({
             type: "success",
             message: `Welcome, ${user.name || user.email}! You are now logged in.`,
           });
+        }}
+      />
+
+      {/* User LLM Profile & Custom API Keys Modal */}
+      <LlmProfileModal
+        isOpen={isLlmProfileModalOpen}
+        onClose={() => setIsLlmProfileModalOpen(false)}
+        onProfileUpdated={() => {
+          // Trigger any needed refreshes
         }}
       />
     </div>

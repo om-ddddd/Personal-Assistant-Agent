@@ -63,6 +63,7 @@ export interface ThreadHistoryMessage {
 interface BackendRuntimeOptions {
   threadId: string;
   backendUrl?: string;
+  modelId?: string;
   initialMessages?: readonly ThreadMessageLike[];
   onStreamComplete?: () => void;
   onInterruptDetected?: (interruptState: ThreadInterruptState) => void;
@@ -265,7 +266,8 @@ export function createBackendChatModel(
   threadId: string,
   backendUrl: string = DEFAULT_BACKEND_URL,
   onStreamComplete?: () => void,
-  onInterruptDetected?: (interruptState: ThreadInterruptState) => void
+  onInterruptDetected?: (interruptState: ThreadInterruptState) => void,
+  modelId?: string
 ): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -291,6 +293,12 @@ export function createBackendChatModel(
       let accumulatedText = "";
       const activeToolInputMap: Record<string, string> = {};
 
+      const effectiveModelId =
+        modelId ||
+        (typeof window !== "undefined"
+          ? localStorage.getItem("selected_assistant_model") || undefined
+          : undefined);
+
       try {
         const response = await fetch(`${backendUrl}/api/chat/stream`, {
           method: "POST",
@@ -301,6 +309,7 @@ export function createBackendChatModel(
           body: JSON.stringify({
             message: userText,
             threadId,
+            modelId: effectiveModelId,
           }),
           signal: abortSignal,
         });
@@ -494,6 +503,7 @@ export function createBackendChatModel(
 export function useBackendRuntime({
   threadId,
   backendUrl = DEFAULT_BACKEND_URL,
+  modelId,
   initialMessages,
   onStreamComplete,
   onInterruptDetected,
@@ -520,8 +530,8 @@ export function useBackendRuntime({
   }, [checkHealth]);
 
   const adapter = useMemo(
-    () => createBackendChatModel(threadId, backendUrl, onStreamComplete, onInterruptDetected),
-    [threadId, backendUrl, onStreamComplete, onInterruptDetected]
+    () => createBackendChatModel(threadId, backendUrl, onStreamComplete, onInterruptDetected, modelId),
+    [threadId, backendUrl, onStreamComplete, onInterruptDetected, modelId]
   );
 
   const runtime = useLocalRuntime(adapter, { initialMessages });
@@ -531,4 +541,57 @@ export function useBackendRuntime({
     isBackendHealthy,
     checkHealth,
   };
+}
+
+export interface WorkspaceSettings {
+  workspacePath: string | null;
+  defaultPath: string;
+  isDefault: boolean;
+  effectivePath: string;
+}
+
+/**
+ * Fetch the current user's workspace path settings from the backend.
+ */
+export async function fetchWorkspaceSettings(
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<WorkspaceSettings | null> {
+  try {
+    const res = await fetch(`${backendUrl}/api/settings/workspace`, {
+      method: "GET",
+      headers: { ...getAuthHeaders() },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error("Failed to fetch workspace settings:", err);
+    return null;
+  }
+}
+
+/**
+ * Update the current user's workspace path on the backend.
+ * Pass workspacePath as a string to set, or reset: true to revert to default.
+ */
+export async function updateWorkspaceSettings(
+  payload: { workspacePath: string } | { reset: true },
+  backendUrl: string = DEFAULT_BACKEND_URL
+): Promise<{ success: boolean; workspacePath?: string | null; effectivePath?: string; isDefault?: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${backendUrl}/api/settings/workspace`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, error: data.error || "Failed to update workspace." };
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || "Network error." };
+  }
 }
